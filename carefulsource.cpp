@@ -168,7 +168,6 @@ static const VSFrame *VS_CC convertcolor_getframe(
     vsapi->requestFrameFilter(n, d->node, frameCtx);
   } else if (activationReason == arAllFramesReady) {
     auto src = vsapi->getFrameFilter(n, d->node, frameCtx);
-
     const VSMap *src_props = vsapi->getFramePropertiesRO(src);
 
     auto src_profile_data =
@@ -200,9 +199,11 @@ static const VSFrame *VS_CC convertcolor_getframe(
 
     for (int plane = 0; plane < d->vi.format.numPlanes; plane++) {
       src_planes[plane] = vsapi->getReadPtr(src, plane);
-      src_strides[plane] = vsapi->getStride(src, plane);
+      src_strides[plane] =
+          vsapi->getStride(src, plane) / d->src_vi->format.bytesPerSample;
       dst_planes[plane] = vsapi->getWritePtr(dst, plane);
-      dst_strides[plane] = vsapi->getStride(dst, plane) / 2;
+      dst_strides[plane] =
+          vsapi->getStride(dst, plane) / d->vi.format.bytesPerSample;
     }
 
     if (d->src_vi->format.bytesPerSample == 2) {
@@ -214,10 +215,62 @@ static const VSFrame *VS_CC convertcolor_getframe(
                        d->vi.height, 3, 3);
     }
 
-    // cmsHPROFILE target_profile = cmsCreate_sRGBProfile();
-    cmsHPROFILE target_profile = cmsCreateXYZProfile();
+    int intype;
+    if (d->src_vi->format.sampleType == VSSampleType::stFloat) {
+      intype = TYPE_RGB_FLT;
+    } else {
+      if (d->src_vi->format.bitsPerSample == 16) {
+        intype = TYPE_RGB_16;
+      } else {
+        intype = TYPE_RGB_8;
+      }
+    }
+
+    cmsHPROFILE target_profile;
+
+    std::cout << "target " << d->target << std::endl;
+
+    VSMap *props = vsapi->getFramePropertiesRW(dst);
+
+    int outtype;
+    if (d->target == "xyz") {
+      vsapi->mapDeleteKey(props, "ICCProfile");
+      vsapi->mapSetInt(props, "_Primaries", 10, maReplace);
+      vsapi->mapSetInt(props, "_Transfer", 8, maReplace);
+
+      target_profile = cmsCreateXYZProfile();
+      if (d->vi.format.sampleType == VSSampleType::stFloat) {
+        outtype = TYPE_XYZ_FLT;
+      } else {
+        outtype = TYPE_XYZ_16;
+      }
+    } else {
+      if (d->target == "srgb") {
+        target_profile = cmsCreate_sRGBProfile();
+      } else {
+        // TODO: load file
+      }
+
+      vsapi->mapDeleteKey(props, "ICCProfile");
+      // TODO: set ICCProfile
+      vsapi->mapSetInt(props, "_ColorRange", 0, maReplace);
+      vsapi->mapSetInt(props, "_Matrix", 0, maReplace);
+      vsapi->mapSetInt(props, "_Primaries", 1, maReplace);
+      vsapi->mapSetInt(props, "_Transfer", 13, maReplace);
+
+      if (d->vi.format.sampleType == VSSampleType::stFloat) {
+        outtype = TYPE_RGB_FLT;
+      } else {
+        if (d->vi.format.bitsPerSample == 16) {
+          outtype = TYPE_RGB_16;
+        } else {
+          outtype = TYPE_RGB_8;
+        }
+      }
+    }
+
     cmsHTRANSFORM transform =
-        cmsCreateTransform(src_profile, TYPE_RGB_8, target_profile, TYPE_XYZ_16,
+        cmsCreateTransform(src_profile, intype, target_profile, outtype,
                            cmsGetHeaderRenderingIntent(src_profile), 0);
 
     if (!transform) {
@@ -239,11 +292,6 @@ static const VSFrame *VS_CC convertcolor_getframe(
       unswizzle<uint8_t>(pixels2.data(), dst_planes, dst_strides, d->vi.width,
                          d->vi.height, 3, 3);
     }
-
-    VSMap *props = vsapi->getFramePropertiesRW(dst);
-    vsapi->mapDeleteKey(props, "ICCProfile");
-    vsapi->mapSetInt(props, "_Primaries", 10, maReplace);
-    vsapi->mapSetInt(props, "_Transfer", 8, maReplace);
 
     return dst;
   }
@@ -276,8 +324,24 @@ void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
       .height = d->src_vi->height,
       .numFrames = 1,
   };
+
+  int bits;
+  if (d->target == "xyz") {
+    if (d->src_vi->format.sampleType == VSSampleType::stFloat) {
+      bits = 32;
+    } else {
+      bits = 16;
+    }
+  } else {
+    if (d->src_vi->format.sampleType == VSSampleType::stFloat) {
+      bits = 32;
+    } else {
+      bits = d->src_vi->format.bitsPerSample;
+    }
+  }
+
   vsapi->queryVideoFormat(&d->vi.format, d->src_vi->format.colorFamily,
-                          d->src_vi->format.sampleType, 16, 0, 0, core);
+                          d->src_vi->format.sampleType, bits, 0, 0, core);
 
   VSFilterDependency deps[]{{d->node, rpStrictSpatial}};
   vsapi->createVideoFilter(out, "ConvertColor", &d->vi, convertcolor_getframe,
