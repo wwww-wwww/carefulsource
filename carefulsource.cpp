@@ -16,44 +16,61 @@ static const VSFrame *VS_CC imagesource_getframe(
     uint8_t *planes[3] = {};
     ptrdiff_t stride[3] = {};
 
+    VSFrame *dst_alpha = nullptr;
+    uint8_t *plane_alpha = nullptr;
+    ptrdiff_t stride_alpha;
+
     for (int p = 0; p < d->vi.format.numPlanes; p++) {
       planes[p] = vsapi->getWritePtr(dst, p);
       stride[p] = vsapi->getStride(dst, p);
     }
 
     VSVideoFormat format = {};
-    vsapi->queryVideoFormat(&format, VSColorFamily::cfRGB,
-                            VSSampleType::stInteger, 8, 0, 0, core);
-    VSVideoFormat format_alpha = {};
-    vsapi->queryVideoFormat(&format_alpha, VSColorFamily::cfGray,
-                            format.sampleType, format.bitsPerSample, 0, 0,
-                            core);
+    vsapi->queryVideoFormat(&format, d->vi.format.colorFamily,
+                            d->vi.format.sampleType, d->vi.format.bitsPerSample,
+                            d->vi.format.subSamplingW,
+                            d->vi.format.subSamplingH, core);
 
-    VSFrame *dst_alpha = vsapi->newVideoFrame(&format_alpha, d->vi.width,
-                                              d->vi.height, nullptr, core);
-    uint8_t *plane_alpha = vsapi->getWritePtr(dst_alpha, 0);
-    ptrdiff_t stride_alpha = vsapi->getStride(dst_alpha, 0);
+    ImageInfo info = d->decoder->info;
 
-    vsapi->mapSetInt(vsapi->getFramePropertiesRW(dst_alpha), "_ColorRange", 0,
-                     maAppend);
+    if (info.has_alpha) {
+      VSVideoFormat format_alpha = {};
+      vsapi->queryVideoFormat(&format_alpha, VSColorFamily::cfGray,
+                              format.sampleType, format.bitsPerSample, 0, 0,
+                              core);
 
-    uint32_t sstride = d->vi.width * 4;
+      dst_alpha = vsapi->newVideoFrame(&format_alpha, d->vi.width, d->vi.height,
+                                       nullptr, core);
+      plane_alpha = vsapi->getWritePtr(dst_alpha, 0);
+      stride_alpha = vsapi->getStride(dst_alpha, 0);
+
+      vsapi->mapSetInt(vsapi->getFramePropertiesRW(dst_alpha), "_ColorRange", 0,
+                       maAppend);
+    }
+
+    uint32_t sstride = d->vi.width * info.components;
 
     std::vector<uint8_t> pixels = d->decoder->decode();
 
     uint8_t *ppixels = pixels.data();
     for (uint32_t y = 0; y < d->vi.height; y++) {
       for (uint32_t x = 0; x < d->vi.width; x++) {
-        planes[0][y * stride[0] + x] = ppixels[x * 4 + 0];
-        planes[1][y * stride[1] + x] = ppixels[x * 4 + 1];
-        planes[2][y * stride[2] + x] = ppixels[x * 4 + 2];
-        plane_alpha[y * stride_alpha + x] = ppixels[x * 4 + 2];
+        if (d->vi.format.numPlanes == 3) {
+          planes[0][y * stride[0] + x] = ppixels[x * info.components + 0];
+          planes[1][y * stride[1] + x] = ppixels[x * info.components + 1];
+          planes[2][y * stride[2] + x] = ppixels[x * info.components + 2];
+        }
+        if (dst_alpha) {
+          plane_alpha[y * stride_alpha + x] = ppixels[x * info.components + 2];
+        }
       }
       ppixels += sstride;
     }
 
     VSMap *Props = vsapi->getFramePropertiesRW(dst);
-    vsapi->mapConsumeFrame(Props, "_Alpha", dst_alpha, maAppend);
+
+    if (dst_alpha)
+      vsapi->mapConsumeFrame(Props, "_Alpha", dst_alpha, maAppend);
 
     vsapi->mapSetInt(Props, "_ColorRange", 0, maAppend);
     vsapi->mapSetInt(Props, "_Matrix", 0, maAppend);
@@ -81,8 +98,19 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
   d->decoder = std::make_unique<PngDecoder>(file_path);
   ImageInfo info = d->decoder->info;
 
-  vsapi->queryVideoFormat(&d->vi.format, VSColorFamily::cfRGB,
-                          VSSampleType::stInteger, 8, 0, 0, core);
+  std::cout << "width " << info.width << std::endl
+            << "height " << info.height << std::endl
+            << "components " << info.components << std::endl
+            << "alpha " << info.has_alpha << std::endl
+            << "color " << info.color << std::endl
+            << "sample_type " << info.sample_type << std::endl
+            << "bits " << info.bits << std::endl
+            << "subsampling_w " << info.subsampling_w << std::endl
+            << "subsampling_h " << info.subsampling_h << std::endl;
+
+  vsapi->queryVideoFormat(&d->vi.format, info.color, info.sample_type,
+                          info.bits, info.subsampling_w, info.subsampling_h,
+                          core);
   d->vi.width = info.width;
   d->vi.height = info.height;
   d->vi.numFrames = 1;

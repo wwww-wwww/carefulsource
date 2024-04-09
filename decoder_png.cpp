@@ -11,9 +11,19 @@ PngDecoder::PngDecoder(std::string path) : BaseDecoder(path) {
 
   initialize();
 
+  auto color_type = png_get_color_type(png, pinfo);
+
   info = {
       .width = png_get_image_width(png, pinfo),
       .height = png_get_image_height(png, pinfo),
+      .components = png_get_channels(png, pinfo),
+      .has_alpha = color_type & PNG_COLOR_MASK_ALPHA,
+      .color = color_type & PNG_COLOR_MASK_COLOR ? VSColorFamily::cfRGB
+                                                 : VSColorFamily::cfGray,
+      .sample_type = VSSampleType::stInteger,
+      .bits = png_get_bit_depth(png, pinfo),
+      .subsampling_w = 0,
+      .subsampling_h = 0,
   };
 }
 
@@ -57,11 +67,12 @@ std::vector<uint8_t> PngDecoder::decode() {
   if (finished_reading)
     initialize();
 
-  std::vector<uint8_t> pixels(info.height * info.width * 4);
+  std::vector<uint8_t> pixels(info.height * info.width * info.components *
+                              (info.bits == 16 ? 2 : 1));
 
   std::vector<png_bytep> row_pointers(info.height);
   for (uint32_t y = 0; y < info.height; y++) {
-    row_pointers[y] = pixels.data() + (y * info.width * 4);
+    row_pointers[y] = pixels.data() + (y * info.width * info.components);
   }
 
   for (uint32_t x = 0; x < pixels.size(); x++)
