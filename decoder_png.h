@@ -23,4 +23,5 @@ public:
   void initialize();
 
   std::vector<uint8_t> decode() override;
+  cmsHPROFILE get_color_profile() override;
 };

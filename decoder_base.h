@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Vapoursynth4.h"
+#include "lcms2.h"
 #include <string>
 #include <vector>
 
@@ -22,6 +23,9 @@ private:
 
 public:
   BaseDecoder(std::string path) : path(path){};
-  virtual std::vector<uint8_t> decode() = 0;
+
   ImageInfo info;
+
+  virtual std::vector<uint8_t> decode() = 0;
+  virtual cmsHPROFILE get_color_profile() = 0;
 };

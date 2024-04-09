@@ -17,7 +17,7 @@ PngDecoder::PngDecoder(std::string path) : BaseDecoder(path) {
       .width = png_get_image_width(png, pinfo),
       .height = png_get_image_height(png, pinfo),
       .components = png_get_channels(png, pinfo),
-      .has_alpha = color_type & PNG_COLOR_MASK_ALPHA,
+      .has_alpha = (bool)(color_type & PNG_COLOR_MASK_ALPHA),
       .color = color_type & PNG_COLOR_MASK_COLOR ? VSColorFamily::cfRGB
                                                  : VSColorFamily::cfGray,
       .sample_type = VSSampleType::stInteger,
@@ -61,6 +61,36 @@ void PngDecoder::initialize() {
   png_read_info(png, pinfo);
 
   finished_reading = false;
+}
+
+cmsHPROFILE PngDecoder::get_color_profile() {
+  if (finished_reading)
+    initialize();
+
+  if (!png_get_valid(png, pinfo, PNG_INFO_iCCP)) {
+    return nullptr;
+  }
+
+  png_charp name;
+  png_bytep icc_data;
+  png_uint_32 icc_size;
+  int comp_type;
+  png_get_iCCP(png, pinfo, &name, &comp_type, &icc_data, &icc_size);
+
+  cmsHPROFILE src_profile = cmsOpenProfileFromMem(icc_data, icc_size);
+  cmsColorSpaceSignature profileSpace = cmsGetColorSpace(src_profile);
+
+  auto color_type = png_get_color_type(png, pinfo);
+
+  bool rgb = color_type & PNG_COLOR_MASK_COLOR;
+
+  if ((rgb && profileSpace != cmsSigRgbData) ||
+      (!rgb && profileSpace != cmsSigGrayData)) {
+    cmsCloseProfile(src_profile);
+    return nullptr;
+  }
+
+  return src_profile;
 }
 
 std::vector<uint8_t> PngDecoder::decode() {

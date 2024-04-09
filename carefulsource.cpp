@@ -4,17 +4,45 @@
 #include <iostream>
 #include <memory>
 
+template <typename T>
+void unswizzle(const T *in, T **planes, ptrdiff_t *strides, uint32_t width,
+               uint32_t height, uint32_t planes_in, uint32_t planes_out) {
+  for (uint32_t p = 0; p < std::min(planes_in, planes_out); p++) {
+    for (uint32_t y = 0; y < height; y++) {
+      for (uint32_t x = 0; x < width; x++) {
+        planes[p][y * strides[p] + x] =
+            in[y * width * planes_in + x * planes_in + p];
+      }
+    }
+  }
+}
+
+template <typename T>
+void swizzle(const T **planes, ptrdiff_t *strides, T *out, uint32_t width,
+             uint32_t height, uint32_t planes_in, uint32_t planes_out) {
+  for (uint32_t p = 0; p < std::min(planes_in, planes_out); p++) {
+    for (uint32_t y = 0; y < height; y++) {
+      for (uint32_t x = 0; x < width; x++) {
+        out[y * width * planes_out + x * planes_out + p] =
+            planes[p][y * strides[p] + x];
+      }
+    }
+  }
+}
+
 static const VSFrame *VS_CC imagesource_getframe(
     int n, int activationReason, void *instanceData, void **frameData,
     VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
   auto d = static_cast<ImageSourceData *>(instanceData);
 
   if (activationReason == arInitial) {
-    VSFrame *dst = vsapi->newVideoFrame(&d->vi.format, d->vi.width,
-                                        d->vi.height, nullptr, core);
+    ImageInfo info = d->decoder->info;
+
+    VSFrame *dst = vsapi->newVideoFrame(&d->vi.format, info.width, info.height,
+                                        nullptr, core);
 
     uint8_t *planes[3] = {};
-    ptrdiff_t stride[3] = {};
+    ptrdiff_t strides[3] = {};
 
     VSFrame *dst_alpha = nullptr;
     uint8_t *plane_alpha = nullptr;
@@ -22,24 +50,16 @@ static const VSFrame *VS_CC imagesource_getframe(
 
     for (int p = 0; p < d->vi.format.numPlanes; p++) {
       planes[p] = vsapi->getWritePtr(dst, p);
-      stride[p] = vsapi->getStride(dst, p);
+      strides[p] = vsapi->getStride(dst, p);
     }
-
-    VSVideoFormat format = {};
-    vsapi->queryVideoFormat(&format, d->vi.format.colorFamily,
-                            d->vi.format.sampleType, d->vi.format.bitsPerSample,
-                            d->vi.format.subSamplingW,
-                            d->vi.format.subSamplingH, core);
-
-    ImageInfo info = d->decoder->info;
 
     if (info.has_alpha) {
       VSVideoFormat format_alpha = {};
       vsapi->queryVideoFormat(&format_alpha, VSColorFamily::cfGray,
-                              format.sampleType, format.bitsPerSample, 0, 0,
-                              core);
+                              d->vi.format.sampleType,
+                              d->vi.format.bitsPerSample, 0, 0, core);
 
-      dst_alpha = vsapi->newVideoFrame(&format_alpha, d->vi.width, d->vi.height,
+      dst_alpha = vsapi->newVideoFrame(&format_alpha, info.width, info.height,
                                        nullptr, core);
       plane_alpha = vsapi->getWritePtr(dst_alpha, 0);
       stride_alpha = vsapi->getStride(dst_alpha, 0);
@@ -48,17 +68,33 @@ static const VSFrame *VS_CC imagesource_getframe(
                        maAppend);
     }
 
-    uint32_t sstride = d->vi.width * info.components;
+    uint32_t sstride = info.width * info.components;
+
+    cmsHPROFILE src_profile = d->decoder->get_color_profile();
+    if (!src_profile) {
+      src_profile = cmsCreate_sRGBProfile();
+    }
+
+    cmsUInt32Number out_length;
+    cmsSaveProfileToMem(src_profile, NULL, &out_length);
+    std::vector<uint8_t> src_profile_bytes(out_length);
+    cmsSaveProfileToMem(src_profile, src_profile_bytes.data(), &out_length);
+
+    VSMap *props = vsapi->getFramePropertiesRW(dst);
+
+    vsapi->mapSetData(props, "ICCProfile",
+                      reinterpret_cast<const char *>(src_profile_bytes.data()),
+                      out_length, dtBinary, maReplace);
 
     std::vector<uint8_t> pixels = d->decoder->decode();
 
     uint8_t *ppixels = pixels.data();
-    for (uint32_t y = 0; y < d->vi.height; y++) {
-      for (uint32_t x = 0; x < d->vi.width; x++) {
+    for (uint32_t y = 0; y < info.height; y++) {
+      for (uint32_t x = 0; x < info.width; x++) {
         if (d->vi.format.numPlanes == 3) {
-          planes[0][y * stride[0] + x] = ppixels[x * info.components + 0];
-          planes[1][y * stride[1] + x] = ppixels[x * info.components + 1];
-          planes[2][y * stride[2] + x] = ppixels[x * info.components + 2];
+          planes[0][y * strides[0] + x] = ppixels[x * info.components + 0];
+          planes[1][y * strides[1] + x] = ppixels[x * info.components + 1];
+          planes[2][y * strides[2] + x] = ppixels[x * info.components + 2];
         }
         if (dst_alpha) {
           plane_alpha[y * stride_alpha + x] = ppixels[x * info.components + 2];
@@ -67,15 +103,13 @@ static const VSFrame *VS_CC imagesource_getframe(
       ppixels += sstride;
     }
 
-    VSMap *Props = vsapi->getFramePropertiesRW(dst);
-
     if (dst_alpha)
-      vsapi->mapConsumeFrame(Props, "_Alpha", dst_alpha, maAppend);
+      vsapi->mapConsumeFrame(props, "_Alpha", dst_alpha, maAppend);
 
-    vsapi->mapSetInt(Props, "_ColorRange", 0, maAppend);
-    vsapi->mapSetInt(Props, "_Matrix", 0, maAppend);
-    vsapi->mapSetInt(Props, "_Primaries", 1, maAppend);
-    vsapi->mapSetInt(Props, "_Transfer", 13, maAppend);
+    vsapi->mapSetInt(props, "_ColorRange", 0, maAppend);
+    vsapi->mapSetInt(props, "_Matrix", 0, maAppend);
+    vsapi->mapSetInt(props, "_Primaries", 1, maAppend);
+    vsapi->mapSetInt(props, "_Transfer", 13, maAppend);
 
     return dst;
   }
@@ -108,17 +142,146 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
             << "subsampling_w " << info.subsampling_w << std::endl
             << "subsampling_h " << info.subsampling_h << std::endl;
 
+  d->vi = {
+      .format = {},
+      .fpsNum = 1,
+      .fpsDen = 1,
+      .width = (int)info.width,
+      .height = (int)info.height,
+      .numFrames = 1,
+  };
+
   vsapi->queryVideoFormat(&d->vi.format, info.color, info.sample_type,
                           info.bits, info.subsampling_w, info.subsampling_h,
                           core);
-  d->vi.width = info.width;
-  d->vi.height = info.height;
-  d->vi.numFrames = 1;
-  d->vi.fpsNum = 1;
-  d->vi.fpsDen = 1;
 
   vsapi->createVideoFilter(out, "ImageSource", &d->vi, imagesource_getframe,
                            imagesource_free, fmUnordered, nullptr, 0, d, core);
+}
+
+static const VSFrame *VS_CC convertcolor_getframe(
+    int n, int activationReason, void *instanceData, void **frameData,
+    VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+  auto d = static_cast<ConvertColorData *>(instanceData);
+
+  if (activationReason == arInitial) {
+    vsapi->requestFrameFilter(n, d->node, frameCtx);
+  } else if (activationReason == arAllFramesReady) {
+    auto src = vsapi->getFrameFilter(n, d->node, frameCtx);
+
+    const VSMap *src_props = vsapi->getFramePropertiesRO(src);
+
+    auto src_profile_data =
+        vsapi->mapGetData(src_props, "ICCProfile", 0, nullptr);
+    int src_profile_size =
+        vsapi->mapGetDataSize(src_props, "ICCProfile", 0, nullptr);
+
+    std::cout << "frame has profile size " << src_profile_size << std::endl;
+
+    cmsHPROFILE src_profile =
+        cmsOpenProfileFromMem(src_profile_data, src_profile_size);
+
+    decltype(src) fr[]{nullptr, nullptr, nullptr};
+    constexpr int pl[]{0, 1, 2};
+
+    auto dst = vsapi->newVideoFrame2(&d->vi.format, d->vi.width, d->vi.height,
+                                     fr, pl, src, core);
+
+    std::vector<uint8_t> pixels(d->vi.width * d->vi.height * 4 *
+                                d->src_vi->format.bytesPerSample);
+    std::vector<uint8_t> pixels2(d->vi.width * d->vi.height * 4 *
+                                 d->vi.format.bytesPerSample);
+
+    const uint8_t *src_planes[3] = {};
+    ptrdiff_t src_strides[3] = {};
+
+    uint8_t *dst_planes[3] = {};
+    ptrdiff_t dst_strides[3] = {};
+
+    for (int plane = 0; plane < d->vi.format.numPlanes; plane++) {
+      src_planes[plane] = vsapi->getReadPtr(src, plane);
+      src_strides[plane] = vsapi->getStride(src, plane);
+      dst_planes[plane] = vsapi->getWritePtr(dst, plane);
+      dst_strides[plane] = vsapi->getStride(dst, plane) / 2;
+    }
+
+    if (d->src_vi->format.bytesPerSample == 2) {
+      swizzle<uint16_t>(reinterpret_cast<const uint16_t **>(src_planes),
+                        src_strides, (uint16_t *)pixels.data(), d->vi.width,
+                        d->vi.height, 3, 3);
+    } else {
+      swizzle<uint8_t>(src_planes, src_strides, pixels.data(), d->vi.width,
+                       d->vi.height, 3, 3);
+    }
+
+    // cmsHPROFILE target_profile = cmsCreate_sRGBProfile();
+    cmsHPROFILE target_profile = cmsCreateXYZProfile();
+    cmsHTRANSFORM transform =
+        cmsCreateTransform(src_profile, TYPE_RGB_8, target_profile, TYPE_XYZ_16,
+                           cmsGetHeaderRenderingIntent(src_profile), 0);
+
+    if (!transform) {
+      std::cout << "invalid transform" << std::endl;
+    }
+
+    cmsDoTransform(transform, pixels.data(), pixels2.data(),
+                   d->vi.width * d->vi.height);
+
+    cmsDeleteTransform(transform);
+    cmsCloseProfile(src_profile);
+    cmsCloseProfile(target_profile);
+
+    if (d->vi.format.bytesPerSample == 2) {
+      unswizzle<uint16_t>((uint16_t *)pixels2.data(),
+                          reinterpret_cast<uint16_t **>(dst_planes),
+                          dst_strides, d->vi.width, d->vi.height, 3, 3);
+    } else {
+      unswizzle<uint8_t>(pixels2.data(), dst_planes, dst_strides, d->vi.width,
+                         d->vi.height, 3, 3);
+    }
+
+    VSMap *props = vsapi->getFramePropertiesRW(dst);
+    vsapi->mapDeleteKey(props, "ICCProfile");
+    vsapi->mapSetInt(props, "_Primaries", 10, maReplace);
+    vsapi->mapSetInt(props, "_Transfer", 8, maReplace);
+
+    return dst;
+  }
+
+  return nullptr;
+}
+
+static void VS_CC convertcolor_free(void *instanceData, VSCore *core,
+                                    const VSAPI *vsapi) {
+  auto d = static_cast<ConvertColorData *>(instanceData);
+  vsapi->freeNode(d->node);
+  delete d;
+}
+
+void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
+                               VSCore *core, const VSAPI *vsapi) {
+  ConvertColorData *d = new ConvertColorData();
+
+  d->node = vsapi->mapGetNode(in, "clip", 0, nullptr);
+  const char *target = vsapi->mapGetData(in, "target", 0, NULL);
+  d->target = target;
+
+  d->src_vi = vsapi->getVideoInfo(d->node);
+
+  d->vi = {
+      .format = {},
+      .fpsNum = 1,
+      .fpsDen = 1,
+      .width = d->src_vi->width,
+      .height = d->src_vi->height,
+      .numFrames = 1,
+  };
+  vsapi->queryVideoFormat(&d->vi.format, d->src_vi->format.colorFamily,
+                          d->src_vi->format.sampleType, 16, 0, 0, core);
+
+  VSFilterDependency deps[]{{d->node, rpStrictSpatial}};
+  vsapi->createVideoFilter(out, "ConvertColor", &d->vi, convertcolor_getframe,
+                           convertcolor_free, fmUnordered, deps, 1, d, core);
 }
 
 VS_EXTERNAL_API(void)
@@ -128,4 +291,6 @@ VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
                        plugin);
   vspapi->registerFunction("ImageSource", "source:data;", "clip:vnode;",
                            imagesource_create, nullptr, plugin);
+  vspapi->registerFunction("ConvertColor", "clip:vnode;target:data;",
+                           "clip:vnode;", convertcolor_create, nullptr, plugin);
 }

@@ -20,6 +20,7 @@ else
   install_dir = get_option('libdir') / 'vapoursynth'
 endif
 
+lcms2_dep = dependency('lcms2')
 libpng_dep = dependency('libpng')
 
 sources = [
@@ -33,7 +34,7 @@ sources = [
 libs = []
 
 shared_module('carefulsource', sources,
-  dependencies: [vapoursynth_dep, libpng_dep],
+  dependencies: [vapoursynth_dep, lcms2_dep, libpng_dep],
   link_with: libs,
   install: true,
   install_dir: install_dir,
