@@ -25,6 +25,9 @@ libpng_dep = dependency('libpng')
 sources = [
   'CarefulSource.cpp',
   'CarefulSource.h',
+  'decoder_base.h',
+  'decoder_png.cpp',
+  'decoder_png.h',
 ]
 
 libs = []
