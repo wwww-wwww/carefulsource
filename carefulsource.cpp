@@ -248,11 +248,20 @@ static const VSFrame *VS_CC convertcolor_getframe(
       if (d->target == "srgb") {
         target_profile = cmsCreate_sRGBProfile();
       } else {
-        // TODO: load file
+        target_profile = cmsOpenProfileFromFile(d->target.c_str(), "r");
       }
 
-      vsapi->mapDeleteKey(props, "ICCProfile");
-      // TODO: set ICCProfile
+      cmsUInt32Number out_length;
+      cmsSaveProfileToMem(target_profile, NULL, &out_length);
+      std::vector<uint8_t> target_profile_bytes(out_length);
+      cmsSaveProfileToMem(target_profile, target_profile_bytes.data(),
+                          &out_length);
+
+      vsapi->mapSetData(
+          props, "ICCProfile",
+          reinterpret_cast<const char *>(target_profile_bytes.data()),
+          out_length, dtBinary, maReplace);
+
       vsapi->mapSetInt(props, "_ColorRange", 0, maReplace);
       vsapi->mapSetInt(props, "_Matrix", 0, maReplace);
       vsapi->mapSetInt(props, "_Primaries", 1, maReplace);
@@ -268,6 +277,8 @@ static const VSFrame *VS_CC convertcolor_getframe(
         }
       }
     }
+
+    // TODO: gray
 
     cmsHTRANSFORM transform =
         cmsCreateTransform(src_profile, intype, target_profile, outtype,
