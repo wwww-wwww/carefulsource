@@ -1,5 +1,6 @@
 #include "decoder_png.h"
 
+#include "lcms2.h"
 #include <algorithm>
 #include <iostream>
 
@@ -25,6 +26,23 @@ PngDecoder::PngDecoder(std::string path) : BaseDecoder(path) {
       .subsampling_w = 0,
       .subsampling_h = 0,
   };
+}
+
+static void PNGDoGammaCorrection(png_structp png, png_infop pinfo) {
+  if (!png_get_valid(png, pinfo, PNG_INFO_gAMA))
+    return;
+
+  double aGamma;
+
+  if (png_get_gAMA(png, pinfo, &aGamma)) {
+    if ((aGamma <= 0.0) || (aGamma > 21474.83)) {
+      aGamma = 0.45455;
+      png_set_gAMA(png, pinfo, aGamma);
+    }
+    png_set_gamma(png, 2.2, aGamma);
+  } else {
+    png_set_gamma(png, 2.2, 0.45455);
+  }
 }
 
 void PngDecoder::initialize() {
@@ -71,37 +89,75 @@ void PngDecoder::initialize() {
 
   png_set_swap(png);
 
+  if (!_get_color_profile()) {
+    if (png_get_valid(png, pinfo, PNG_INFO_gAMA) &&
+        png_get_valid(png, pinfo, PNG_INFO_cHRM)) {
+      png_set_gray_to_rgb(png);
+
+      PNGDoGammaCorrection(png, pinfo);
+    }
+  }
+
   finished_reading = false;
 }
 
-cmsHPROFILE PngDecoder::get_color_profile() {
-  if (finished_reading)
-    initialize();
+bool PngDecoder::_get_color_profile() {
+  if (png_get_valid(png, pinfo, PNG_INFO_iCCP)) {
+    png_charp name;
+    png_bytep icc_data;
+    png_uint_32 icc_size;
+    int comp_type;
+    png_get_iCCP(png, pinfo, &name, &comp_type, &icc_data, &icc_size);
 
-  if (!png_get_valid(png, pinfo, PNG_INFO_iCCP)) {
-    return nullptr;
+    src_profile = cmsOpenProfileFromMem(icc_data, icc_size);
+    cmsColorSpaceSignature profileSpace = cmsGetColorSpace(src_profile);
+
+    auto color_type = png_get_color_type(png, pinfo);
+
+    bool rgb = color_type & PNG_COLOR_MASK_COLOR;
+
+    if ((rgb && profileSpace != cmsSigRgbData) ||
+        (!rgb && profileSpace != cmsSigGrayData)) {
+      cmsCloseProfile(src_profile);
+      src_profile = nullptr;
+    } else {
+      return true;
+    }
   }
 
-  png_charp name;
-  png_bytep icc_data;
-  png_uint_32 icc_size;
-  int comp_type;
-  png_get_iCCP(png, pinfo, &name, &comp_type, &icc_data, &icc_size);
+  if (png_get_valid(png, pinfo, PNG_INFO_gAMA) &&
+      png_get_valid(png, pinfo, PNG_INFO_cHRM)) {
+    cmsCIExyYTRIPLE primaries = {{0.64, 0.33, 1}, //
+                                 {0.21, 0.71, 1}, //
+                                 {0.15, 0.06, 1}};
+    cmsCIExyY whitepoint = {0.3127, 0.3290, 1.0};
 
-  cmsHPROFILE src_profile = cmsOpenProfileFromMem(icc_data, icc_size);
-  cmsColorSpaceSignature profileSpace = cmsGetColorSpace(src_profile);
+    png_get_cHRM(png, pinfo, &whitepoint.x, &whitepoint.y, //
+                 &primaries.Red.x, &primaries.Red.y, &primaries.Green.x,
+                 &primaries.Green.y, &primaries.Blue.x, &primaries.Blue.y);
 
-  auto color_type = png_get_color_type(png, pinfo);
+    double gamma;
+    png_get_gAMA(png, pinfo, &gamma);
 
-  bool rgb = color_type & PNG_COLOR_MASK_COLOR;
+    cmsToneCurve *cmsgamma[3];
+    cmsgamma[0] = cmsgamma[1] = cmsgamma[2] = cmsBuildGamma(NULL, 1.0 / gamma);
 
-  if ((rgb && profileSpace != cmsSigRgbData) ||
-      (!rgb && profileSpace != cmsSigGrayData)) {
-    cmsCloseProfile(src_profile);
-    return nullptr;
+    src_profile = cmsCreateRGBProfile(&whitepoint, &primaries, cmsgamma);
+
+    cmsFreeToneCurve(cmsgamma[0]);
+    return false;
   }
 
-  return src_profile;
+  if (png_get_valid(png, pinfo, PNG_INFO_sRGB)) {
+    int intent;
+    png_set_gray_to_rgb(png);
+    png_get_sRGB(png, pinfo, &intent);
+    src_profile = cmsCreate_sRGBProfile();
+    cmsSetHeaderRenderingIntent(src_profile, intent);
+    return true;
+  }
+
+  return false;
 }
 
 std::vector<uint8_t> PngDecoder::decode() {

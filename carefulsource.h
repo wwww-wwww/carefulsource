@@ -2,8 +2,8 @@
 
 #include "decoder_base.h"
 
-#include <VSHelper4.h>
-#include <VapourSynth4.h>
+#include "VSHelper4.h"
+#include "VapourSynth4.h"
 #include <memory>
 #include <string>
 
@@ -17,4 +17,5 @@ struct ConvertColorData final {
   const VSVideoInfo *src_vi;
   VSVideoInfo vi;
   std::string target;
+  cmsHPROFILE target_profile;
 };

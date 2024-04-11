@@ -23,6 +23,7 @@ private:
 
 public:
   BaseDecoder(std::string path) : path(path){};
+  virtual ~BaseDecoder() = default;
 
   ImageInfo info;
 
