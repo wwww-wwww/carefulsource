@@ -185,8 +185,6 @@ static const VSFrame *VS_CC convertcolor_getframe(
     cmsHPROFILE src_profile =
         cmsOpenProfileFromMem(src_profile_data, src_profile_size);
 
-    cmsSaveProfileToFile(src_profile, "src_profile.icc");
-
     decltype(src) fr[]{nullptr, nullptr, nullptr};
     constexpr int pl[]{0, 1, 2};
 
@@ -222,7 +220,12 @@ static const VSFrame *VS_CC convertcolor_getframe(
 
     // TODO: alpha
 
-    if (d->src_vi->format.bytesPerSample == 2) {
+    if (d->src_vi->format.bytesPerSample == 4) {
+      swizzle<uint32_t>(reinterpret_cast<const uint32_t **>(src_planes),
+                        src_strides, n_in_planes, (uint32_t *)pixels.data(),
+                        d->vi.width * n_in_planes, n_in_planes, d->vi.width,
+                        d->vi.height);
+    } else if (d->src_vi->format.bytesPerSample == 2) {
       swizzle<uint16_t>(reinterpret_cast<const uint16_t **>(src_planes),
                         src_strides, n_in_planes, (uint16_t *)pixels.data(),
                         d->vi.width * n_in_planes, n_in_planes, d->vi.width,
@@ -250,6 +253,8 @@ static const VSFrame *VS_CC convertcolor_getframe(
     int outtype;
     if (d->target == "xyz") {
       vsapi->mapDeleteKey(props, "ICCProfile");
+      vsapi->mapSetInt(props, "_ColorRange", 0, maReplace);
+      vsapi->mapSetInt(props, "_Matrix", 0, maReplace);
       vsapi->mapSetInt(props, "_Primaries", 10, maReplace);
       vsapi->mapSetInt(props, "_Transfer", 8, maReplace);
 
@@ -271,18 +276,35 @@ static const VSFrame *VS_CC convertcolor_getframe(
           reinterpret_cast<const char *>(target_profile_bytes.data()),
           out_length, dtBinary, maReplace);
 
-      vsapi->mapSetInt(props, "_ColorRange", 0, maReplace);
-      vsapi->mapSetInt(props, "_Matrix", 0, maReplace);
-      vsapi->mapSetInt(props, "_Primaries", 1, maReplace);
-      vsapi->mapSetInt(props, "_Transfer", 1, maReplace);
+      if (d->vi.format.colorFamily == VSColorFamily::cfGray) {
+        vsapi->mapSetInt(props, "_ColorRange", 0, maReplace);
+        vsapi->mapSetInt(props, "_Matrix", 2, maReplace);
+        vsapi->mapSetInt(props, "_Primaries", 2, maReplace);
+        vsapi->mapSetInt(props, "_Transfer", 2, maReplace);
 
-      outtype_intermediate = TYPE_RGB_FLT;
-      if (d->vi.format.sampleType == VSSampleType::stFloat) {
-        outtype = TYPE_RGB_FLT;
-      } else if (d->vi.format.bitsPerSample == 16) {
-        outtype = TYPE_RGB_16;
+        outtype_intermediate = TYPE_GRAY_FLT;
+        if (d->vi.format.sampleType == VSSampleType::stFloat) {
+          outtype = TYPE_GRAY_FLT;
+        } else if (d->vi.format.bitsPerSample == 16) {
+          outtype = TYPE_GRAY_16;
+        } else {
+          outtype = TYPE_GRAY_8;
+        }
+
       } else {
-        outtype = TYPE_RGB_8;
+        vsapi->mapSetInt(props, "_ColorRange", 0, maReplace);
+        vsapi->mapSetInt(props, "_Matrix", 0, maReplace);
+        vsapi->mapSetInt(props, "_Primaries", 1, maReplace);
+        vsapi->mapSetInt(props, "_Transfer", 1, maReplace);
+
+        outtype_intermediate = TYPE_RGB_FLT;
+        if (d->vi.format.sampleType == VSSampleType::stFloat) {
+          outtype = TYPE_RGB_FLT;
+        } else if (d->vi.format.bitsPerSample == 16) {
+          outtype = TYPE_RGB_16;
+        } else {
+          outtype = TYPE_RGB_8;
+        }
       }
     }
 
@@ -411,8 +433,6 @@ void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
   }
 
   int sample_type = d->src_vi->format.sampleType;
-  // int sample_type = VSSampleType::stFloat;
-  // bits = 32;
 
   vsapi->queryVideoFormat(&d->vi.format, color_family, sample_type, bits, 0, 0,
                           core);
