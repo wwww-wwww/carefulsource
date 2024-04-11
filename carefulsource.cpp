@@ -327,7 +327,7 @@ static const VSFrame *VS_CC convertcolor_getframe(
         cmsGetHeaderRenderingIntent(src_profile),
         cmsFLAGS_HIGHRESPRECALC | cmsFLAGS_BLACKPOINTCOMPENSATION);
 
-    cmsDoTransform(transform, pixels2.data(), pixels3.data(),
+    cmsDoTransform(transform2, pixels2.data(), pixels3.data(),
                    d->vi.width * d->vi.height);
 
     cmsDeleteTransform(transform2);

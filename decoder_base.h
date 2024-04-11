@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Vapoursynth4.h"
+#include "VapourSynth4.h"
 #include "lcms2.h"
 #include <string>
 #include <vector>
