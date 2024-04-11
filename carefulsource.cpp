@@ -5,21 +5,22 @@
 #include <memory>
 
 template <typename T>
-void unswizzle(const T *in, T **planes, ptrdiff_t *strides, uint32_t width,
-               uint32_t height, uint32_t planes_in, uint32_t planes_out) {
+void unswizzle(const T *in, uint32_t stride, T **planes, ptrdiff_t *strides,
+               uint32_t width, uint32_t height, uint32_t planes_in,
+               uint32_t planes_out) {
   for (uint32_t p = 0; p < std::min(planes_in, planes_out); p++) {
     for (uint32_t y = 0; y < height; y++) {
       for (uint32_t x = 0; x < width; x++) {
-        planes[p][y * strides[p] + x] =
-            in[y * width * planes_in + x * planes_in + p];
+        planes[p][y * strides[p] + x] = in[y * stride + x * planes_in + p];
       }
     }
   }
 }
 
 template <typename T>
-void swizzle(const T **planes, ptrdiff_t *strides, T *out, uint32_t width,
-             uint32_t height, uint32_t planes_in, uint32_t planes_out) {
+void swizzle(const T **planes, ptrdiff_t *strides, T *out, uint32_t stride,
+             uint32_t width, uint32_t height, uint32_t planes_in,
+             uint32_t planes_out) {
   for (uint32_t p = 0; p < std::min(planes_in, planes_out); p++) {
     for (uint32_t y = 0; y < height; y++) {
       for (uint32_t x = 0; x < width; x++) {
@@ -40,17 +41,14 @@ static const VSFrame *VS_CC imagesource_getframe(
 
     VSFrame *dst = vsapi->newVideoFrame(&d->vi.format, info.width, info.height,
                                         nullptr, core);
-
-    uint8_t *planes[3] = {};
-    ptrdiff_t strides[3] = {};
-
     VSFrame *dst_alpha = nullptr;
-    uint8_t *plane_alpha = nullptr;
-    ptrdiff_t stride_alpha;
+
+    uint8_t *planes[4] = {};
+    ptrdiff_t strides[4] = {};
 
     for (int p = 0; p < d->vi.format.numPlanes; p++) {
       planes[p] = vsapi->getWritePtr(dst, p);
-      strides[p] = vsapi->getStride(dst, p);
+      strides[p] = vsapi->getStride(dst, p) / d->vi.format.bytesPerSample;
     }
 
     if (info.has_alpha) {
@@ -61,14 +59,13 @@ static const VSFrame *VS_CC imagesource_getframe(
 
       dst_alpha = vsapi->newVideoFrame(&format_alpha, info.width, info.height,
                                        nullptr, core);
-      plane_alpha = vsapi->getWritePtr(dst_alpha, 0);
-      stride_alpha = vsapi->getStride(dst_alpha, 0);
+      planes[d->vi.format.numPlanes] = vsapi->getWritePtr(dst_alpha, 0);
+      strides[d->vi.format.numPlanes] =
+          vsapi->getStride(dst_alpha, 0) / format_alpha.bytesPerSample;
 
       vsapi->mapSetInt(vsapi->getFramePropertiesRW(dst_alpha), "_ColorRange", 0,
-                       maAppend);
+                       maReplace);
     }
-
-    uint32_t sstride = info.width * info.components;
 
     cmsHPROFILE src_profile = d->decoder->get_color_profile();
     if (!src_profile) {
@@ -84,30 +81,31 @@ static const VSFrame *VS_CC imagesource_getframe(
 
     vsapi->mapSetData(props, "ICCProfile",
                       reinterpret_cast<const char *>(src_profile_bytes.data()),
-                      out_length, dtBinary, maReplace);
+                      out_length, dtBinary, maAppend);
 
     std::vector<uint8_t> pixels = d->decoder->decode();
 
-    uint8_t *ppixels = pixels.data();
-    for (uint32_t y = 0; y < info.height; y++) {
-      for (uint32_t x = 0; x < info.width; x++) {
-        if (d->vi.format.numPlanes == 3) {
-          planes[0][y * strides[0] + x] = ppixels[x * info.components + 0];
-          planes[1][y * strides[1] + x] = ppixels[x * info.components + 1];
-          planes[2][y * strides[2] + x] = ppixels[x * info.components + 2];
-        }
-        if (dst_alpha) {
-          plane_alpha[y * stride_alpha + x] = ppixels[x * info.components + 2];
-        }
-      }
-      ppixels += sstride;
+    if (info.bits == 16) {
+      unswizzle<uint16_t>(
+          (uint16_t *)pixels.data(), info.width * info.components,
+          reinterpret_cast<uint16_t **>(planes), strides, info.width,
+          info.height, info.components, info.components);
+    } else {
+      unswizzle<uint8_t>(pixels.data(), info.width * info.components, planes,
+                         strides, info.width, info.height, info.components,
+                         info.components);
     }
 
     if (dst_alpha)
-      vsapi->mapConsumeFrame(props, "_Alpha", dst_alpha, maAppend);
+      vsapi->mapConsumeFrame(props, "_Alpha", dst_alpha, maReplace);
+
+    if (info.components < 3) {
+      vsapi->mapSetInt(props, "_Matrix", 2, maAppend);
+    } else {
+      vsapi->mapSetInt(props, "_Matrix", 0, maAppend);
+    }
 
     vsapi->mapSetInt(props, "_ColorRange", 0, maAppend);
-    vsapi->mapSetInt(props, "_Matrix", 0, maAppend);
     vsapi->mapSetInt(props, "_Primaries", 1, maAppend);
     vsapi->mapSetInt(props, "_Transfer", 13, maAppend);
 
@@ -208,11 +206,11 @@ static const VSFrame *VS_CC convertcolor_getframe(
 
     if (d->src_vi->format.bytesPerSample == 2) {
       swizzle<uint16_t>(reinterpret_cast<const uint16_t **>(src_planes),
-                        src_strides, (uint16_t *)pixels.data(), d->vi.width,
-                        d->vi.height, 3, 3);
+                        src_strides, (uint16_t *)pixels.data(), d->vi.width * 3,
+                        d->vi.width, d->vi.height, 3, 3);
     } else {
-      swizzle<uint8_t>(src_planes, src_strides, pixels.data(), d->vi.width,
-                       d->vi.height, 3, 3);
+      swizzle<uint8_t>(src_planes, src_strides, pixels.data(), d->vi.width * 3,
+                       d->vi.width, d->vi.height, 3, 3);
     }
 
     int intype;
@@ -296,12 +294,12 @@ static const VSFrame *VS_CC convertcolor_getframe(
     cmsCloseProfile(target_profile);
 
     if (d->vi.format.bytesPerSample == 2) {
-      unswizzle<uint16_t>((uint16_t *)pixels2.data(),
+      unswizzle<uint16_t>((uint16_t *)pixels2.data(), d->vi.width * 3,
                           reinterpret_cast<uint16_t **>(dst_planes),
                           dst_strides, d->vi.width, d->vi.height, 3, 3);
     } else {
-      unswizzle<uint8_t>(pixels2.data(), dst_planes, dst_strides, d->vi.width,
-                         d->vi.height, 3, 3);
+      unswizzle<uint8_t>(pixels2.data(), d->vi.width * 3, dst_planes,
+                         dst_strides, d->vi.width, d->vi.height, 3, 3);
     }
 
     return dst;

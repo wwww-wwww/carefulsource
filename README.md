@@ -17,7 +17,14 @@ cs.ConvertColor(vnode clip, string target)
 - [ ] HEIC
 - [ ] JPEG
 - [ ] JXL
-- [ ] PNG
-  - [x] RGBA
+- [x] PNG
+  - [x] 8 bit RGBA
+  - [x] 8 bit RGB
+  - [x] 8 bit LA
+  - [x] 8 bit L
+  - [x] 16 bit RGBA
+  - [x] 16 bit RGB
+  - [x] 16 bit LA
+  - [x] 16 bit L
 - [ ] TIFF
 - [ ] WEBP

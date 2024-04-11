@@ -60,6 +60,17 @@ void PngDecoder::initialize() {
   png_set_read_fn(png, &reader, readFn);
   png_read_info(png, pinfo);
 
+  auto color_type = png_get_color_type(png, pinfo);
+  if (color_type == PNG_COLOR_TYPE_PALETTE)
+    png_set_palette_to_rgb(png);
+
+  auto bit_depth = png_get_bit_depth(png, pinfo);
+
+  if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
+    png_set_expand_gray_1_2_4_to_8(png);
+
+  png_set_swap(png);
+
   finished_reading = false;
 }
 
@@ -97,16 +108,14 @@ std::vector<uint8_t> PngDecoder::decode() {
   if (finished_reading)
     initialize();
 
-  std::vector<uint8_t> pixels(info.height * info.width * info.components *
-                              (info.bits == 16 ? 2 : 1));
+  int stride = info.width * info.components * (info.bits == 16 ? 2 : 1);
+
+  std::vector<uint8_t> pixels(info.height * stride);
 
   std::vector<png_bytep> row_pointers(info.height);
   for (uint32_t y = 0; y < info.height; y++) {
-    row_pointers[y] = pixels.data() + (y * info.width * info.components);
+    row_pointers[y] = pixels.data() + (y * stride);
   }
-
-  for (uint32_t x = 0; x < pixels.size(); x++)
-    pixels[x] = x;
 
   png_read_image(png, row_pointers.data());
 
