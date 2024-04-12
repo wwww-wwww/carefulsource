@@ -1,8 +1,10 @@
 #include "carefulsource.h"
 
+#include "decoder_jpeg.h"
 #include "decoder_png.h"
+
+#include <fstream>
 #include <iostream>
-#include <memory>
 
 template <typename T>
 void unswizzle(const T *in, uint32_t stride, uint32_t planes_in, T **planes,
@@ -134,10 +136,28 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
 
   const char *file_path = vsapi->mapGetData(in, "source", 0, NULL);
 
-  d->decoder = std::make_unique<PngDecoder>(file_path);
+  {
+    std::ifstream file(file_path, std::ios_base::binary);
+    file.unsetf(std::ios::skipws);
+    file.seekg(0, std::ios::end);
+    uint32_t filesize = file.tellg();
+    file.seekg(0, std::ios::beg);
+    d->data.resize(filesize);
+    file.read(reinterpret_cast<char *>(d->data.data()), filesize);
+  }
+
+  if (PngDecoder::is_png(d->data.data())) {
+    d->decoder = std::make_unique<PngDecoder>(&d->data);
+  } else if (JpegDecoder::is_jpeg(d->data.data())) {
+    d->decoder = std::make_unique<JpegDecoder>(&d->data);
+  } else {
+    throw std::runtime_error("file format unrecognized ");
+  }
+
   ImageInfo info = d->decoder->info;
 
-  std::cout << "width " << info.width << std::endl
+  std::cout << "decoder " << d->decoder->get_name() << std::endl
+            << "width " << info.width << std::endl
             << "height " << info.height << std::endl
             << "components " << info.components << std::endl
             << "alpha " << info.has_alpha << std::endl

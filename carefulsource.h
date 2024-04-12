@@ -8,6 +8,7 @@
 #include <string>
 
 struct ImageSourceData final {
+  std::vector<uint8_t> data;
   std::unique_ptr<BaseDecoder> decoder;
   VSVideoInfo vi;
 };

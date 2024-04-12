@@ -3,26 +3,22 @@
 #include "lcms2.h"
 #include <algorithm>
 #include <iostream>
+#include <string.h>
 
-PngDecoder::PngDecoder(std::string path) : BaseDecoder(path) {
-  reader.file.open(path, std::ios_base::binary);
-  reader.file.unsetf(std::ios::skipws);
-  reader.file.seekg(0, std::ios::end);
-  reader.size = reader.file.tellg();
+PngDecoder::PngDecoder(std::vector<uint8_t> *data)
+    : BaseDecoder(data), d(std::make_unique<PngDecodeSession>(data)) {
 
-  initialize();
-
-  auto color_type = png_get_color_type(png, pinfo);
+  auto color_type = png_get_color_type(d->png, d->pinfo);
 
   info = {
-      .width = png_get_image_width(png, pinfo),
-      .height = png_get_image_height(png, pinfo),
-      .components = png_get_channels(png, pinfo),
+      .width = png_get_image_width(d->png, d->pinfo),
+      .height = png_get_image_height(d->png, d->pinfo),
+      .components = png_get_channels(d->png, d->pinfo),
       .has_alpha = (bool)(color_type & PNG_COLOR_MASK_ALPHA),
       .color = color_type & PNG_COLOR_MASK_COLOR ? VSColorFamily::cfRGB
                                                  : VSColorFamily::cfGray,
       .sample_type = VSSampleType::stInteger,
-      .bits = png_get_bit_depth(png, pinfo),
+      .bits = png_get_bit_depth(d->png, d->pinfo),
       .subsampling_w = 0,
       .subsampling_h = 0,
   };
@@ -45,10 +41,7 @@ static void PNGDoGammaCorrection(png_structp png, png_infop pinfo) {
   }
 }
 
-void PngDecoder::initialize() {
-  reader.remain = reader.size;
-  reader.file.seekg(0, std::ios::beg);
-
+PngDecodeSession::PngDecodeSession(std::vector<uint8_t> *data) : m_data(data) {
   auto errorFn = [](png_struct *, png_const_charp msg) {
     throw std::runtime_error(msg);
   };
@@ -66,16 +59,19 @@ void PngDecoder::initialize() {
     throw std::runtime_error("Failed to create png info struct");
   }
 
+  m_remain = m_data->size();
+  m_read = 0;
   auto readFn = [](png_struct *p, png_byte *data, png_size_t length) {
-    auto *r = (PngReader *)png_get_io_ptr(p);
-    uint32_t next = std::min(r->remain, (uint32_t)length);
+    auto *r = (PngDecodeSession *)png_get_io_ptr(p);
+    uint32_t next = std::min(r->m_remain, (uint32_t)length);
     if (next > 0) {
-      r->file.read((char *)data, next);
-      r->remain -= next;
+      memcpy(data, r->m_data->data() + r->m_read, next);
+      r->m_remain -= next;
+      r->m_read += next;
     }
   };
 
-  png_set_read_fn(png, &reader, readFn);
+  png_set_read_fn(png, (void *)this, readFn);
   png_read_info(png, pinfo);
 
   auto color_type = png_get_color_type(png, pinfo);
@@ -97,11 +93,9 @@ void PngDecoder::initialize() {
       PNGDoGammaCorrection(png, pinfo);
     }
   }
-
-  finished_reading = false;
 }
 
-bool PngDecoder::_get_color_profile() {
+bool PngDecodeSession::_get_color_profile() {
   if (png_get_valid(png, pinfo, PNG_INFO_iCCP)) {
     png_charp name;
     png_bytep icc_data;
@@ -161,8 +155,8 @@ bool PngDecoder::_get_color_profile() {
 }
 
 std::vector<uint8_t> PngDecoder::decode() {
-  if (finished_reading)
-    initialize();
+  if (d->finished_reading)
+    d = std::make_unique<PngDecodeSession>(m_data);
 
   int stride = info.width * info.components * (info.bits == 16 ? 2 : 1);
 
@@ -173,9 +167,9 @@ std::vector<uint8_t> PngDecoder::decode() {
     row_pointers[y] = pixels.data() + (y * stride);
   }
 
-  png_read_image(png, row_pointers.data());
+  png_read_image(d->png, row_pointers.data());
 
-  finished_reading = true;
+  d->finished_reading = true;
 
   return pixels;
 }
