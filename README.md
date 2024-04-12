@@ -5,11 +5,13 @@
 ```
 cs.ImageSource(string path)
 ```
+
 ```
-cs.ConvertColor(vnode clip, string target)
+cs.ConvertColor(vnode clip, string output_profile[, int float_output=0])
 ```
 
-- target: Predefined profile ["xyz", "srgb"] or path to ICC profile
+- output_profile: Predefined profile ["xyz", "srgb", "srgb-gray"] or path to ICC profile to transform to
+- float_output: Output as float
 
 ## Formats
 

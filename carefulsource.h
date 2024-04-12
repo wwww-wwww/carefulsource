@@ -18,4 +18,5 @@ struct ConvertColorData final {
   VSVideoInfo vi;
   std::string target;
   cmsHPROFILE target_profile;
+  bool float_output;
 };

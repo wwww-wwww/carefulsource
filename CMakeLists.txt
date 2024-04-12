@@ -11,6 +11,12 @@ add_library(carefulsource SHARED
 
 set_property(TARGET carefulsource PROPERTY CXX_STANDARD 20)
 
+find_package(PkgConfig)
+if(PkgConfig_FOUND)
+  pkg_search_module(VAPOURSYNTH REQUIRED vapoursynth)
+  install(TARGETS carefulsource DESTINATION ${VAPOURSYNTH_LIBDIR}/vapoursynth)
+endif()
+
 set(LCMS2_NAMES ${LCMS2_NAMES} lcms2 liblcms2 liblcms2_static)
 find_library(lcms2 NAMES ${LCMS2_NAMES})
 

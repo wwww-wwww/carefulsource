@@ -197,8 +197,10 @@ static const VSFrame *VS_CC convertcolor_getframe(
     std::vector<uint8_t> pixels(d->vi.width * d->vi.height * n_in_planes *
                                 d->src_vi->format.bytesPerSample);
     std::vector<uint8_t> pixels2(d->vi.width * d->vi.height * n_out_planes * 4);
-    std::vector<uint8_t> pixels3(d->vi.width * d->vi.height * n_out_planes *
-                                 d->vi.format.bytesPerSample);
+    std::vector<uint8_t> pixels3;
+    if (!d->float_output)
+      pixels3.resize(d->vi.width * d->vi.height * n_out_planes *
+                     d->vi.format.bytesPerSample);
 
     const uint8_t *src_planes[4] = {};
     ptrdiff_t src_strides[4] = {};
@@ -322,32 +324,38 @@ static const VSFrame *VS_CC convertcolor_getframe(
 
     cmsDeleteTransform(transform);
 
-    cmsHTRANSFORM transform2 = cmsCreateTransform(
-        d->target_profile, outtype_intermediate, d->target_profile, outtype,
-        cmsGetHeaderRenderingIntent(src_profile),
-        cmsFLAGS_HIGHRESPRECALC | cmsFLAGS_BLACKPOINTCOMPENSATION);
+    uint8_t *out_pointer = pixels2.data();
 
-    cmsDoTransform(transform2, pixels2.data(), pixels3.data(),
-                   d->vi.width * d->vi.height);
+    if (!d->float_output) {
+      cmsHTRANSFORM transform2 = cmsCreateTransform(
+          d->target_profile, outtype_intermediate, d->target_profile, outtype,
+          cmsGetHeaderRenderingIntent(src_profile),
+          cmsFLAGS_HIGHRESPRECALC | cmsFLAGS_BLACKPOINTCOMPENSATION);
 
-    cmsDeleteTransform(transform2);
+      cmsDoTransform(transform2, pixels2.data(), pixels3.data(),
+                     d->vi.width * d->vi.height);
 
-    cmsCloseProfile(src_profile);
+      cmsDeleteTransform(transform2);
+
+      cmsCloseProfile(src_profile);
+
+      out_pointer = pixels3.data();
+    }
 
     if (d->vi.format.bytesPerSample == 4) {
-      unswizzle<uint32_t>((uint32_t *)pixels3.data(),
-                          d->vi.width * n_out_planes, n_out_planes,
+      unswizzle<uint32_t>((uint32_t *)out_pointer, d->vi.width * n_out_planes,
+                          n_out_planes,
                           reinterpret_cast<uint32_t **>(dst_planes),
                           dst_strides, n_out_planes, d->vi.width, d->vi.height);
     } else if (d->vi.format.bytesPerSample == 2) {
-      unswizzle<uint16_t>((uint16_t *)pixels3.data(),
-                          d->vi.width * n_out_planes, n_out_planes,
+      unswizzle<uint16_t>((uint16_t *)out_pointer, d->vi.width * n_out_planes,
+                          n_out_planes,
                           reinterpret_cast<uint16_t **>(dst_planes),
                           dst_strides, n_out_planes, d->vi.width, d->vi.height);
     } else {
-      unswizzle<uint8_t>(pixels3.data(), d->vi.width * n_out_planes,
-                         n_out_planes, dst_planes, dst_strides, n_out_planes,
-                         d->vi.width, d->vi.height);
+      unswizzle<uint8_t>(out_pointer, d->vi.width * n_out_planes, n_out_planes,
+                         dst_planes, dst_strides, n_out_planes, d->vi.width,
+                         d->vi.height);
     }
 
     return dst;
@@ -393,10 +401,17 @@ void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
   ConvertColorData *d = new ConvertColorData();
 
   d->node = vsapi->mapGetNode(in, "clip", 0, nullptr);
-  const char *target = vsapi->mapGetData(in, "target", 0, NULL);
-  d->target = target;
-
   d->src_vi = vsapi->getVideoInfo(d->node);
+  d->target = std::string(vsapi->mapGetData(in, "output_profile", 0, nullptr));
+
+  int err = 0;
+
+  d->float_output = !!vsapi->mapGetInt(in, "float_output", 0, &err);
+  if (err)
+    d->float_output = d->src_vi->format.sampleType == VSSampleType::stFloat;
+
+  err = 0;
+  // TODO: input profile
 
   d->vi = {
       .format = {},
@@ -407,8 +422,13 @@ void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
       .numFrames = 1,
   };
 
+  int sample_type = d->src_vi->format.sampleType;
+  if (d->float_output) {
+    sample_type = VSSampleType::stFloat;
+  }
+
   int bits;
-  if (d->src_vi->format.sampleType == VSSampleType::stFloat) {
+  if (sample_type == VSSampleType::stFloat) {
     bits = 32;
   } else if (d->target == "xyz") {
     bits = 16;
@@ -429,10 +449,20 @@ void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
     color_family = VSColorFamily::cfGray;
   } else {
     d->target_profile = cmsOpenProfileFromFile(d->target.c_str(), "r");
-    // TODO: get color family from profile
+    if (!d->target_profile) {
+      throw std::runtime_error("Bad target profile");
+    }
+    cmsColorSpaceSignature profile_colorspace =
+        cmsGetColorSpace(d->target_profile);
+    if (profile_colorspace == cmsSigGrayData) {
+      color_family = VSColorFamily::cfGray;
+    } else if (profile_colorspace == cmsSigRgbData) {
+      color_family = VSColorFamily::cfRGB;
+    } else {
+      throw std::runtime_error(std::string("Unhandled profile colorspace ") +
+                               std::to_string(color_family));
+    }
   }
-
-  int sample_type = d->src_vi->format.sampleType;
 
   vsapi->queryVideoFormat(&d->vi.format, color_family, sample_type, bits, 0, 0,
                           core);
@@ -449,6 +479,10 @@ VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
                        plugin);
   vspapi->registerFunction("ImageSource", "source:data;", "clip:vnode;",
                            imagesource_create, nullptr, plugin);
-  vspapi->registerFunction("ConvertColor", "clip:vnode;target:data;",
+  vspapi->registerFunction("ConvertColor",
+                           "clip:vnode;"
+                           "output_profile:data;"
+                           "input_profile:data:opt;"
+                           "float_output:int:opt;",
                            "clip:vnode;", convertcolor_create, nullptr, plugin);
 }
