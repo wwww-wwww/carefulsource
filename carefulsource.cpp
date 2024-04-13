@@ -36,8 +36,8 @@ void swizzle(const T **planes, ptrdiff_t *strides, uint32_t planes_in, T *out,
 template <typename T>
 void copy_planar(const T *in, uint32_t stride, uint32_t planes_in, T **planes,
                  ptrdiff_t *strides, uint32_t planes_out, uint32_t height) {
-  for (int p = 0; p < std::min(planes_in, planes_out); p++) {
-    for (int y = 0; y < height; y++) {
+  for (uint32_t p = 0; p < std::min(planes_in, planes_out); p++) {
+    for (uint32_t y = 0; y < height; y++) {
       memcpy(planes[p] + strides[p] * y, in + height * stride * p + stride * y,
              stride * sizeof(T));
     }
@@ -122,7 +122,7 @@ static const VSFrame *VS_CC imagesource_getframe(
 
     std::vector<uint8_t> pixels = d->decoder->decode();
 
-    if (info.subsampling_w == 0 && info.subsampling_h == 0) {
+    if (info.color == VSColorFamily::cfYUV) {
       if (info.bits == 32) {
         unswizzle<uint32_t>((uint32_t *)pixels.data(),
                             info.width * info.components, info.components,
@@ -138,16 +138,36 @@ static const VSFrame *VS_CC imagesource_getframe(
                            info.components, planes, strides, info.components,
                            info.width, info.height);
       }
+
     } else {
+      if (info.bits == 32) {
+        unswizzle<uint32_t>((uint32_t *)pixels.data(),
+                            info.width * info.components, info.components,
+                            reinterpret_cast<uint32_t **>(planes), strides,
+                            info.components, info.width, info.height);
+      } else if (info.bits == 16) {
+        unswizzle<uint16_t>((uint16_t *)pixels.data(),
+                            info.width * info.components, info.components,
+                            reinterpret_cast<uint16_t **>(planes), strides,
+                            info.components, info.width, info.height);
+      } else {
+        unswizzle<uint8_t>(pixels.data(), info.width * info.components,
+                           info.components, planes, strides, info.components,
+                           info.width, info.height);
+      }
     }
 
     if (dst_alpha)
       vsapi->mapConsumeFrame(props, "_Alpha", dst_alpha, maReplace);
 
-    if (info.components < 3) {
+    if (d->vi.format.colorFamily == VSColorFamily::cfGray) {
       vsapi->mapSetInt(props, "_Matrix", 2, maAppend);
       vsapi->mapSetInt(props, "_Primaries", 2, maAppend);
       vsapi->mapSetInt(props, "_Transfer", 2, maAppend);
+    } else if (d->vi.format.colorFamily == VSColorFamily::cfYUV) {
+      vsapi->mapSetInt(props, "_Matrix", 1, maAppend);
+      vsapi->mapSetInt(props, "_Primaries", 1, maAppend);
+      vsapi->mapSetInt(props, "_Transfer", 1, maAppend);
     } else {
       vsapi->mapSetInt(props, "_Matrix", 0, maAppend);
       vsapi->mapSetInt(props, "_Primaries", 1, maAppend);
@@ -155,6 +175,19 @@ static const VSFrame *VS_CC imagesource_getframe(
     }
 
     vsapi->mapSetInt(props, "_ColorRange", 0, maAppend);
+    std::string format = d->decoder->get_name();
+    vsapi->mapSetData(props, "ImageFormat", format.c_str(), (int)format.size(),
+                      dtUtf8, maAppend);
+
+    if ((d->decoder->info.actual_width != 0 ||
+         d->decoder->info.actual_height != 0) &&
+        (d->decoder->info.actual_width != d->decoder->info.width ||
+         d->decoder->info.actual_height != d->decoder->info.height)) {
+      vsapi->mapSetInt(props, "ActualWidth", d->decoder->info.actual_width,
+                       maAppend);
+      vsapi->mapSetInt(props, "ActualHeight", d->decoder->info.actual_height,
+                       maAppend);
+    }
 
     return dst;
   }
@@ -174,11 +207,20 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
 
   const char *file_path = vsapi->mapGetData(in, "source", 0, NULL);
 
+  int err = 0;
+  bool subsampling_pad = !!vsapi->mapGetInt(in, "subsampling_pad", 0, &err);
+  if (err)
+    subsampling_pad = true;
+
+  bool jpeg_rgb = !!vsapi->mapGetInt(in, "jpeg_rgb", 0, &err);
+  if (err)
+    jpeg_rgb = false;
+
   {
     std::ifstream file(file_path, std::ios_base::binary);
     file.unsetf(std::ios::skipws);
     file.seekg(0, std::ios::end);
-    uint32_t filesize = file.tellg();
+    size_t filesize = file.tellg();
     file.seekg(0, std::ios::beg);
     d->data.resize(filesize);
     file.read(reinterpret_cast<char *>(d->data.data()), filesize);
@@ -187,7 +229,8 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
   if (PngDecoder::is_png(d->data.data())) {
     d->decoder = std::make_unique<PngDecoder>(&d->data);
   } else if (JpegDecoder::is_jpeg(d->data.data())) {
-    d->decoder = std::make_unique<JpegDecoder>(&d->data);
+    d->decoder =
+        std::make_unique<JpegDecoder>(&d->data, subsampling_pad, jpeg_rgb);
   } else {
     throw std::runtime_error("file format unrecognized ");
   }
@@ -197,6 +240,8 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
   std::cout << "decoder " << d->decoder->get_name() << std::endl
             << "width " << info.width << std::endl
             << "height " << info.height << std::endl
+            << "actual width " << info.actual_width << std::endl
+            << "actual height " << info.actual_height << std::endl
             << "components " << info.components << std::endl
             << "alpha " << info.has_alpha << std::endl
             << "color " << info.color << std::endl
@@ -297,6 +342,7 @@ static const VSFrame *VS_CC convertcolor_getframe(
     bool is_gray = d->src_vi->format.numPlanes == 1;
     bool is_float = d->src_vi->format.sampleType == VSSampleType::stFloat;
     bool is_16 = d->src_vi->format.bitsPerSample == 16;
+    bool is_yuv = d->src_vi->format.colorFamily == VSColorFamily::cfYUV;
 
     int intype = is_gray && is_float ? TYPE_GRAY_FLT
                  : is_gray && is_16  ? TYPE_GRAY_16
@@ -437,6 +483,9 @@ void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
 
   d->node = vsapi->mapGetNode(in, "clip", 0, nullptr);
   d->src_vi = vsapi->getVideoInfo(d->node);
+
+  // TODO: check supported formats
+
   d->target = std::string(vsapi->mapGetData(in, "output_profile", 0, nullptr));
 
   int err = 0;
@@ -508,10 +557,13 @@ void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
 VS_EXTERNAL_API(void)
 VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
   vspapi->configPlugin("moe.grass.carefulsource", "cs", "carefulsource",
-                       VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0,
+                       VS_MAKE_VERSION(0, 1), VAPOURSYNTH_API_VERSION, 0,
                        plugin);
-  vspapi->registerFunction("ImageSource", "source:data;", "clip:vnode;",
-                           imagesource_create, nullptr, plugin);
+  vspapi->registerFunction("ImageSource",
+                           "source:data;"
+                           "subsampling_pad:int:opt;"
+                           "jpeg_rgb:int:opt;",
+                           "clip:vnode;", imagesource_create, nullptr, plugin);
   vspapi->registerFunction("ConvertColor",
                            "clip:vnode;"
                            "output_profile:data;"

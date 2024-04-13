@@ -19,8 +19,6 @@ PngDecoder::PngDecoder(std::vector<uint8_t> *data)
                                                  : VSColorFamily::cfGray,
       .sample_type = VSSampleType::stInteger,
       .bits = png_get_bit_depth(d->png, d->pinfo),
-      .subsampling_w = 0,
-      .subsampling_h = 0,
   };
 }
 
@@ -62,7 +60,7 @@ PngDecodeSession::PngDecodeSession(std::vector<uint8_t> *data)
 
   auto readFn = [](png_struct *p, png_byte *data, png_size_t length) {
     auto *r = (PngDecodeSession *)png_get_io_ptr(p);
-    uint32_t next = std::min(r->m_remain, (uint32_t)length);
+    size_t next = std::min(r->m_remain, (size_t)length);
     if (next > 0) {
       memcpy(data, r->m_data->data() + r->m_read, next);
       r->m_remain -= next;
@@ -83,7 +81,7 @@ PngDecodeSession::PngDecodeSession(std::vector<uint8_t> *data)
 
   png_set_swap(png);
 
-  if (!_get_color_profile()) {
+  if (!get_color_profile()) {
     if (png_get_valid(png, pinfo, PNG_INFO_gAMA) &&
         png_get_valid(png, pinfo, PNG_INFO_cHRM)) {
       png_set_gray_to_rgb(png);
@@ -93,7 +91,7 @@ PngDecodeSession::PngDecodeSession(std::vector<uint8_t> *data)
   }
 }
 
-bool PngDecodeSession::_get_color_profile() {
+bool PngDecodeSession::get_color_profile() {
   if (png_get_valid(png, pinfo, PNG_INFO_iCCP)) {
     png_charp name;
     png_bytep icc_data;
@@ -156,7 +154,7 @@ std::vector<uint8_t> PngDecoder::decode() {
   if (d->finished_reading)
     d = std::make_unique<PngDecodeSession>(m_data);
 
-  int stride = info.width * info.components * (info.bits == 16 ? 2 : 1);
+  int stride = info.width * info.components * (info.bits == 8 ? 1 : 2);
 
   std::vector<uint8_t> pixels(info.height * stride);
 

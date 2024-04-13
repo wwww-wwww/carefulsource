@@ -5,15 +5,15 @@
 
 class PngDecodeSession {
 private:
-  bool _get_color_profile();
+  bool get_color_profile();
+
+  std::vector<uint8_t> *m_data;
+  size_t m_read = 0;
+  size_t m_remain;
 
 public:
   png_struct *png;
   png_info *pinfo;
-
-  std::vector<uint8_t> *m_data;
-  uint32_t m_read = 0;
-  uint32_t m_remain;
 
   cmsHPROFILE src_profile = nullptr;
   bool finished_reading = false;

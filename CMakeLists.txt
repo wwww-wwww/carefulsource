@@ -22,6 +22,10 @@ set(LCMS2_NAMES ${LCMS2_NAMES} lcms2 liblcms2 liblcms2_static)
 find_library(lcms2 NAMES ${LCMS2_NAMES} REQUIRED)
 
 find_package(PNG REQUIRED)
-find_library(libjpeg NAMES libjpeg jpeg REQUIRED)
+find_package(JPEG REQUIRED)
 
-target_link_libraries(carefulsource PRIVATE ${lcms2} PNG::PNG ${libjxl} ${libjpeg})
+target_link_libraries(carefulsource PRIVATE
+  ${lcms2}
+  PNG::PNG
+  JPEG::JPEG
+)

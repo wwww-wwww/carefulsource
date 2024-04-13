@@ -10,13 +10,15 @@
 struct ImageInfo final {
   uint32_t width;
   uint32_t height;
+  uint32_t actual_width = 0;
+  uint32_t actual_height = 0;
   uint32_t components;
-  bool has_alpha;
+  bool has_alpha = false;
   VSColorFamily color;
   VSSampleType sample_type;
   uint32_t bits;
-  uint32_t subsampling_w;
-  uint32_t subsampling_h;
+  uint32_t subsampling_w = 0;
+  uint32_t subsampling_h = 0;
 };
 
 class BaseDecoder {
