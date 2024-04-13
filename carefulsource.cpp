@@ -44,6 +44,26 @@ void copy_planar(const T *in, uint32_t stride, uint32_t planes_in, T **planes,
   }
 }
 
+static cmsToneCurve *Build_sRGBGamma() {
+  cmsFloat64Number Parameters[5];
+
+  Parameters[0] = 2.4;
+  Parameters[1] = 1. / 1.055;
+  Parameters[2] = 0.055 / 1.055;
+  Parameters[3] = 1. / 12.92;
+  Parameters[4] = 0.04045;
+
+  return cmsBuildParametricToneCurve(NULL, 4, Parameters);
+}
+
+static cmsHPROFILE create_sRGB_gray() {
+  cmsToneCurve *gamma22 = Build_sRGBGamma();
+  cmsCIExyY D65 = {0.3127, 0.3290, 1.0};
+  cmsHPROFILE profile = cmsCreateGrayProfile(&D65, gamma22);
+  cmsFreeToneCurve(gamma22);
+  return profile;
+}
+
 static const VSFrame *VS_CC imagesource_getframe(
     int n, int activationReason, void *instanceData, void **frameData,
     VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
@@ -82,7 +102,11 @@ static const VSFrame *VS_CC imagesource_getframe(
 
     cmsHPROFILE src_profile = d->decoder->get_color_profile();
     if (!src_profile) {
-      src_profile = cmsCreate_sRGBProfile();
+      if (d->vi.format.colorFamily == VSColorFamily::cfGray) {
+        src_profile = create_sRGB_gray();
+      } else {
+        src_profile = cmsCreate_sRGBProfile();
+      }
     }
 
     cmsUInt32Number out_length;
@@ -98,20 +122,23 @@ static const VSFrame *VS_CC imagesource_getframe(
 
     std::vector<uint8_t> pixels = d->decoder->decode();
 
-    if (info.bits == 32) {
-      unswizzle<uint32_t>((uint32_t *)pixels.data(),
-                          info.width * info.components, info.components,
-                          reinterpret_cast<uint32_t **>(planes), strides,
-                          info.components, info.width, info.height);
-    } else if (info.bits == 16) {
-      unswizzle<uint16_t>((uint16_t *)pixels.data(),
-                          info.width * info.components, info.components,
-                          reinterpret_cast<uint16_t **>(planes), strides,
-                          info.components, info.width, info.height);
+    if (info.subsampling_w == 0 && info.subsampling_h == 0) {
+      if (info.bits == 32) {
+        unswizzle<uint32_t>((uint32_t *)pixels.data(),
+                            info.width * info.components, info.components,
+                            reinterpret_cast<uint32_t **>(planes), strides,
+                            info.components, info.width, info.height);
+      } else if (info.bits == 16) {
+        unswizzle<uint16_t>((uint16_t *)pixels.data(),
+                            info.width * info.components, info.components,
+                            reinterpret_cast<uint16_t **>(planes), strides,
+                            info.components, info.width, info.height);
+      } else {
+        unswizzle<uint8_t>(pixels.data(), info.width * info.components,
+                           info.components, planes, strides, info.components,
+                           info.width, info.height);
+      }
     } else {
-      unswizzle<uint8_t>(pixels.data(), info.width * info.components,
-                         info.components, planes, strides, info.components,
-                         info.width, info.height);
     }
 
     if (dst_alpha)
@@ -390,26 +417,6 @@ static const VSFrame *VS_CC convertcolor_getframe(
   }
 
   return nullptr;
-}
-
-static cmsToneCurve *Build_sRGBGamma() {
-  cmsFloat64Number Parameters[5];
-
-  Parameters[0] = 2.4;
-  Parameters[1] = 1. / 1.055;
-  Parameters[2] = 0.055 / 1.055;
-  Parameters[3] = 1. / 12.92;
-  Parameters[4] = 0.04045;
-
-  return cmsBuildParametricToneCurve(NULL, 4, Parameters);
-}
-
-static cmsHPROFILE create_sRGB_gray() {
-  cmsToneCurve *gamma22 = Build_sRGBGamma();
-  cmsCIExyY D65 = {0.3127, 0.3290, 1.0};
-  cmsHPROFILE profile = cmsCreateGrayProfile(&D65, gamma22);
-  cmsFreeToneCurve(gamma22);
-  return profile;
 }
 
 static void VS_CC convertcolor_free(void *instanceData, VSCore *core,
