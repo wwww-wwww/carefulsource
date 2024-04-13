@@ -12,10 +12,10 @@ public:
   png_info *pinfo;
 
   std::vector<uint8_t> *m_data;
-  uint32_t m_read;
+  uint32_t m_read = 0;
   uint32_t m_remain;
 
-  cmsHPROFILE src_profile;
+  cmsHPROFILE src_profile = nullptr;
   bool finished_reading = false;
 
   PngDecodeSession(std::vector<uint8_t> *data);

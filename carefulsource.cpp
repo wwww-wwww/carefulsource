@@ -369,7 +369,7 @@ static const VSFrame *VS_CC convertcolor_getframe(
         cmsFLAGS_HIGHRESPRECALC | cmsFLAGS_BLACKPOINTCOMPENSATION);
 
     if (!transform) {
-      std::cout << "invalid transform" << std::endl;
+      throw std::runtime_error("invalid transform");
     }
 
     cmsDoTransform(transform, pixels.data(), pixels2.data(),

@@ -41,7 +41,8 @@ static void PNGDoGammaCorrection(png_structp png, png_infop pinfo) {
   }
 }
 
-PngDecodeSession::PngDecodeSession(std::vector<uint8_t> *data) : m_data(data) {
+PngDecodeSession::PngDecodeSession(std::vector<uint8_t> *data)
+    : m_data(data), m_remain(data->size()) {
   auto errorFn = [](png_struct *, png_const_charp msg) {
     throw std::runtime_error(msg);
   };
@@ -59,8 +60,6 @@ PngDecodeSession::PngDecodeSession(std::vector<uint8_t> *data) : m_data(data) {
     throw std::runtime_error("Failed to create png info struct");
   }
 
-  m_remain = m_data->size();
-  m_read = 0;
   auto readFn = [](png_struct *p, png_byte *data, png_size_t length) {
     auto *r = (PngDecodeSession *)png_get_io_ptr(p);
     uint32_t next = std::min(r->m_remain, (uint32_t)length);
@@ -79,7 +78,6 @@ PngDecodeSession::PngDecodeSession(std::vector<uint8_t> *data) : m_data(data) {
     png_set_palette_to_rgb(png);
 
   auto bit_depth = png_get_bit_depth(png, pinfo);
-
   if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
     png_set_expand_gray_1_2_4_to_8(png);
 
