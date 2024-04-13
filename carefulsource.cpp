@@ -33,6 +33,17 @@ void swizzle(const T **planes, ptrdiff_t *strides, uint32_t planes_in, T *out,
   }
 }
 
+template <typename T>
+void copy_planar(const T *in, uint32_t stride, uint32_t planes_in, T **planes,
+                 ptrdiff_t *strides, uint32_t planes_out, uint32_t height) {
+  for (int p = 0; p < std::min(planes_in, planes_out); p++) {
+    for (int y = 0; y < height; y++) {
+      memcpy(planes[p] + strides[p] * y, in + height * stride * p + stride * y,
+             stride * sizeof(T));
+    }
+  }
+}
+
 static const VSFrame *VS_CC imagesource_getframe(
     int n, int activationReason, void *instanceData, void **frameData,
     VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
@@ -200,8 +211,6 @@ static const VSFrame *VS_CC convertcolor_getframe(
     int src_profile_size =
         vsapi->mapGetDataSize(src_props, "ICCProfile", 0, nullptr);
 
-    std::cout << "frame has profile size " << src_profile_size << std::endl;
-
     cmsHPROFILE src_profile =
         cmsOpenProfileFromMem(src_profile_data, src_profile_size);
 
@@ -307,10 +316,8 @@ static const VSFrame *VS_CC convertcolor_getframe(
         outtype_intermediate = TYPE_GRAY_FLT;
         if (d->vi.format.sampleType == VSSampleType::stFloat) {
           outtype = TYPE_GRAY_FLT;
-        } else if (d->vi.format.bitsPerSample == 16) {
-          outtype = TYPE_GRAY_16;
         } else {
-          outtype = TYPE_GRAY_8;
+          outtype = TYPE_GRAY_16;
         }
 
       } else {
@@ -322,16 +329,15 @@ static const VSFrame *VS_CC convertcolor_getframe(
         outtype_intermediate = TYPE_RGB_FLT;
         if (d->vi.format.sampleType == VSSampleType::stFloat) {
           outtype = TYPE_RGB_FLT;
-        } else if (d->vi.format.bitsPerSample == 16) {
-          outtype = TYPE_RGB_16;
         } else {
-          outtype = TYPE_RGB_8;
+          outtype = TYPE_RGB_16;
         }
       }
     }
 
     cmsHTRANSFORM transform = cmsCreateTransform(
-        src_profile, intype, d->target_profile, outtype_intermediate,
+        src_profile, intype, d->target_profile,
+        outtype_intermediate | PLANAR_SH(1),
         cmsGetHeaderRenderingIntent(src_profile),
         cmsFLAGS_HIGHRESPRECALC | cmsFLAGS_BLACKPOINTCOMPENSATION);
 
@@ -348,7 +354,8 @@ static const VSFrame *VS_CC convertcolor_getframe(
 
     if (!d->float_output) {
       cmsHTRANSFORM transform2 = cmsCreateTransform(
-          d->target_profile, outtype_intermediate, d->target_profile, outtype,
+          d->target_profile, outtype_intermediate | PLANAR_SH(1),
+          d->target_profile, outtype | PLANAR_SH(1),
           cmsGetHeaderRenderingIntent(src_profile),
           cmsFLAGS_HIGHRESPRECALC | cmsFLAGS_BLACKPOINTCOMPENSATION);
 
@@ -363,19 +370,20 @@ static const VSFrame *VS_CC convertcolor_getframe(
     }
 
     if (d->vi.format.bytesPerSample == 4) {
-      unswizzle<uint32_t>((uint32_t *)out_pointer, d->vi.width * n_out_planes,
-                          n_out_planes,
-                          reinterpret_cast<uint32_t **>(dst_planes),
-                          dst_strides, n_out_planes, d->vi.width, d->vi.height);
+      copy_planar<uint32_t>(reinterpret_cast<uint32_t *>(out_pointer),
+                            d->vi.width, n_out_planes,
+                            reinterpret_cast<uint32_t **>(dst_planes),
+                            dst_strides, n_out_planes, d->vi.height);
     } else if (d->vi.format.bytesPerSample == 2) {
-      unswizzle<uint16_t>((uint16_t *)out_pointer, d->vi.width * n_out_planes,
-                          n_out_planes,
-                          reinterpret_cast<uint16_t **>(dst_planes),
-                          dst_strides, n_out_planes, d->vi.width, d->vi.height);
+      copy_planar<uint16_t>(reinterpret_cast<uint16_t *>(out_pointer),
+                            d->vi.width, n_out_planes,
+                            reinterpret_cast<uint16_t **>(dst_planes),
+                            dst_strides, n_out_planes, d->vi.height);
     } else {
-      unswizzle<uint8_t>(out_pointer, d->vi.width * n_out_planes, n_out_planes,
-                         dst_planes, dst_strides, n_out_planes, d->vi.width,
-                         d->vi.height);
+      copy_planar<uint8_t>(reinterpret_cast<uint8_t *>(out_pointer),
+                           d->vi.width, n_out_planes,
+                           reinterpret_cast<uint8_t **>(dst_planes),
+                           dst_strides, n_out_planes, d->vi.height);
     }
 
     return dst;
@@ -450,10 +458,8 @@ void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
   int bits;
   if (sample_type == VSSampleType::stFloat) {
     bits = 32;
-  } else if (d->target == "xyz") {
-    bits = 16;
   } else {
-    bits = d->src_vi->format.bitsPerSample;
+    bits = 16;
   }
 
   d->target_profile = nullptr;
