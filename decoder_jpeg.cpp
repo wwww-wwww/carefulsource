@@ -143,13 +143,6 @@ std::vector<uint8_t> JpegDecoder::decode() {
 
   std::vector<uint8_t> pixels2;
   if (jcs == JCS_CMYK || jcs == JCS_YCCK) {
-    cmsUInt32Number in_type;
-    if (dinfo->saw_Adobe_marker) {
-      in_type = TYPE_CMYK_8_REV;
-    } else {
-      in_type = TYPE_CMYK_8;
-    }
-
     if (!cmyk_profile) {
       cmyk_profile = d->get_color_profile();
     }
