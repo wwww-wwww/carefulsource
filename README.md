@@ -3,7 +3,7 @@
 ## Usage
 
 ```
-cs.ImageSource(string path[, int subsampling_pad=True, int jpeg_rgb=True, int jpeg_fancy_upsampling=True])
+cs.ImageSource(string path[, int subsampling_pad=True, int jpeg_rgb=True, int jpeg_fancy_upsampling=True, string jpeg_cmyk_profile, string jpeg_cmyk_target_profile])
 ```
 
 - path: Path to image file
