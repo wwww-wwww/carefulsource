@@ -122,23 +122,40 @@ static const VSFrame *VS_CC imagesource_getframe(
 
     std::vector<uint8_t> pixels = d->decoder->decode();
 
-    if (info.color == VSColorFamily::cfYUV) {
+    if (info.color == VSColorFamily::cfYUV &&
+        (info.subsampling_w != 0 || info.subsampling_h != 0)) {
+      uint32_t w = info.width;
+      uint32_t h = info.height;
+      uint32_t pw = w >> info.subsampling_w;
+      uint32_t ph = h >> info.subsampling_h;
+      uint8_t *ptr = pixels.data();
       if (info.bits == 32) {
-        unswizzle<uint32_t>((uint32_t *)pixels.data(),
-                            info.width * info.components, info.components,
-                            reinterpret_cast<uint32_t **>(planes), strides,
-                            info.components, info.width, info.height);
+        copy_planar<uint32_t>((uint32_t *)ptr, w, 1,
+                              reinterpret_cast<uint32_t **>(&planes[0]),
+                              &strides[0], 1, h);
+        copy_planar<uint32_t>((uint32_t *)ptr + w * h, pw, 1,
+                              reinterpret_cast<uint32_t **>(&planes[1]),
+                              &strides[1], 1, ph);
+        copy_planar<uint32_t>((uint32_t *)ptr + w * h + pw * ph, pw, 1,
+                              reinterpret_cast<uint32_t **>(&planes[2]),
+                              &strides[2], 1, ph);
       } else if (info.bits == 16) {
-        unswizzle<uint16_t>((uint16_t *)pixels.data(),
-                            info.width * info.components, info.components,
-                            reinterpret_cast<uint16_t **>(planes), strides,
-                            info.components, info.width, info.height);
+        copy_planar<uint16_t>((uint16_t *)ptr, w, 1,
+                              reinterpret_cast<uint16_t **>(&planes[0]),
+                              &strides[0], 1, h);
+        copy_planar<uint16_t>((uint16_t *)ptr + w * h, pw, 1,
+                              reinterpret_cast<uint16_t **>(&planes[1]),
+                              &strides[1], 1, ph);
+        copy_planar<uint16_t>((uint16_t *)ptr + w * h + pw * ph, pw, 1,
+                              reinterpret_cast<uint16_t **>(&planes[2]),
+                              &strides[2], 1, ph);
       } else {
-        unswizzle<uint8_t>(pixels.data(), info.width * info.components,
-                           info.components, planes, strides, info.components,
-                           info.width, info.height);
+        copy_planar<uint8_t>(ptr, w, 1, &planes[0], &strides[0], 1, h);
+        copy_planar<uint8_t>(ptr + w * h, pw, 1, &planes[1], &strides[1], 1,
+                             ph);
+        copy_planar<uint8_t>(ptr + w * h + pw * ph, pw, 1, &planes[2],
+                             &strides[2], 1, ph);
       }
-
     } else {
       if (info.bits == 32) {
         unswizzle<uint32_t>((uint32_t *)pixels.data(),
@@ -165,7 +182,7 @@ static const VSFrame *VS_CC imagesource_getframe(
       vsapi->mapSetInt(props, "_Primaries", 2, maAppend);
       vsapi->mapSetInt(props, "_Transfer", 2, maAppend);
     } else if (d->vi.format.colorFamily == VSColorFamily::cfYUV) {
-      vsapi->mapSetInt(props, "_Matrix", 1, maAppend);
+      vsapi->mapSetInt(props, "_Matrix", info.yuv_matrix, maAppend);
       vsapi->mapSetInt(props, "_Primaries", 1, maAppend);
       vsapi->mapSetInt(props, "_Transfer", 1, maAppend);
     } else {
@@ -216,6 +233,11 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
   if (err)
     jpeg_rgb = false;
 
+  bool jpeg_fancy_upsampling =
+      !!vsapi->mapGetInt(in, "jpeg_fancy_upsampling", 0, &err);
+  if (err)
+    jpeg_fancy_upsampling = true;
+
   {
     std::ifstream file(file_path, std::ios_base::binary);
     file.unsetf(std::ios::skipws);
@@ -229,8 +251,8 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
   if (PngDecoder::is_png(d->data.data())) {
     d->decoder = std::make_unique<PngDecoder>(&d->data);
   } else if (JpegDecoder::is_jpeg(d->data.data())) {
-    d->decoder =
-        std::make_unique<JpegDecoder>(&d->data, subsampling_pad, jpeg_rgb);
+    d->decoder = std::make_unique<JpegDecoder>(&d->data, subsampling_pad,
+                                               jpeg_rgb, jpeg_fancy_upsampling);
   } else {
     throw std::runtime_error("file format unrecognized ");
   }
@@ -562,7 +584,8 @@ VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
   vspapi->registerFunction("ImageSource",
                            "source:data;"
                            "subsampling_pad:int:opt;"
-                           "jpeg_rgb:int:opt;",
+                           "jpeg_rgb:int:opt;"
+                           "jpeg_fancy_upsampling:int:opt;",
                            "clip:vnode;", imagesource_create, nullptr, plugin);
   vspapi->registerFunction("ConvertColor",
                            "clip:vnode;"

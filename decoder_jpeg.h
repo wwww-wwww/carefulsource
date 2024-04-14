@@ -22,10 +22,12 @@ class JpegDecoder : public BaseDecoder {
 private:
   std::unique_ptr<JpegDecodeSession> d;
   bool subsampling_pad;
-  bool jpeg_rgb;
+  bool rgb;
+  bool fancy_upsampling;
 
 public:
-  JpegDecoder(std::vector<uint8_t> *data, bool subsampling_pad, bool jpeg_rgb);
+  JpegDecoder(std::vector<uint8_t> *data, bool subsampling_pad, bool rgb,
+              bool fancy_upsampling);
 
   std::vector<uint8_t> decode() override;
   cmsHPROFILE get_color_profile() override { return d->src_profile; };

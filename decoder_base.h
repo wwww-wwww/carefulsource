@@ -19,6 +19,7 @@ struct ImageInfo final {
   uint32_t bits;
   uint32_t subsampling_w = 0;
   uint32_t subsampling_h = 0;
+  int yuv_matrix = 1;
 };
 
 class BaseDecoder {

@@ -49,17 +49,18 @@ void JpegDecodeSession::get_color_profile() {
 }
 
 JpegDecoder::JpegDecoder(std::vector<uint8_t> *data, bool subsampling_pad,
-                         bool jpeg_rgb)
+                         bool rgb, bool fancy_upsampling)
     : BaseDecoder(data), d(std::make_unique<JpegDecodeSession>(data)),
-      subsampling_pad(subsampling_pad), jpeg_rgb(jpeg_rgb) {
+      subsampling_pad(subsampling_pad), rgb(rgb),
+      fancy_upsampling(fancy_upsampling) {
   auto jcs = d->jinfo.jpeg_color_space;
-  auto color = jcs == JCS_RGB                 ? VSColorFamily::cfRGB
-               : jcs == JCS_YCbCr && jpeg_rgb ? VSColorFamily::cfRGB
-               : jcs == JCS_YCbCr             ? VSColorFamily::cfYUV
-               : jcs == JCS_GRAYSCALE         ? VSColorFamily::cfGray
-               : jcs == JCS_CMYK              ? VSColorFamily::cfRGB
-               : jcs == JCS_YCCK              ? VSColorFamily::cfRGB
-                                              : VSColorFamily::cfUndefined;
+  auto color = jcs == JCS_RGB            ? VSColorFamily::cfRGB
+               : jcs == JCS_YCbCr && rgb ? VSColorFamily::cfRGB
+               : jcs == JCS_YCbCr        ? VSColorFamily::cfYUV
+               : jcs == JCS_GRAYSCALE    ? VSColorFamily::cfGray
+               : jcs == JCS_CMYK         ? VSColorFamily::cfRGB
+               : jcs == JCS_YCCK         ? VSColorFamily::cfRGB
+                                         : VSColorFamily::cfUndefined;
 
   uint32_t subsampling_w = 0;
   uint32_t subsampling_h = 0;
@@ -104,6 +105,7 @@ JpegDecoder::JpegDecoder(std::vector<uint8_t> *data, bool subsampling_pad,
       .bits = 8,
       .subsampling_w = subsampling_w,
       .subsampling_h = subsampling_h,
+      .yuv_matrix = 5,
   };
 }
 
@@ -135,7 +137,7 @@ std::vector<uint8_t> JpegDecoder::decode() {
     // TODO: transform into rgb
   }
 
-  dinfo->do_fancy_upsampling = true;
+  dinfo->do_fancy_upsampling = fancy_upsampling;
   dinfo->dct_method = JDCT_ISLOW;
 
   uint32_t stride = info.width * info.components;
@@ -148,93 +150,57 @@ std::vector<uint8_t> JpegDecoder::decode() {
     }
     jpeg_finish_decompress(dinfo);
   } else if (info.color == VSColorFamily::cfYUV) {
-    int scalingfactor = 1;
-    int i, retval = 0;
-    int pw[3], ph[3], iw[3], tmpbufsize = 0, usetmpbuf = 0, th[3];
-    JSAMPLE *_tmpbuf = NULL, *ptr;
-    JSAMPROW *outbuf[3], *tmpbuf[3];
-
-    for (i = 0; i < 3; i++) {
-      tmpbuf[i] = NULL;
-      outbuf[i] = NULL;
-    }
-
-    // dinfo->scale_num = scalingfactor;
-    // dinfo->scale_denom = scalingfactor;
-    // jpeg_calc_output_dimensions(d->jinfo);
-
-    int dctsize = DCTSIZE * scalingfactor;
-
-    /*for (i = 0; i < dinfo->num_components; i++) {
-      jpeg_component_info *compptr = &dinfo->comp_info[i];
-      int ih;
-
-      iw[i] = compptr->width_in_blocks * dctsize;
-      ih = compptr->height_in_blocks * dctsize;
-      pw[i] = i == 0 ? dinfo->output_width : dinfo->output_width /
-    (info.subsampling_w << 1); ph[i] = i == 0 ? dinfo->output_height :
-    dinfo->output_height / (info.subsampling_h << 1); if (iw[i] != pw[i] ||
-    ih
-    != ph[i]) usetmpbuf = 1; th[i] = compptr->v_samp_factor * dctsize;
-      tmpbufsize += iw[i] * th[i];
-
-     outbuf[i] = (JSAMPROW *)malloc(sizeof(JSAMPROW) * ph[i]);
-
-      ptr = dstPlanes[i];
-      for (row = 0; row < ph[i]; row++) {
-        outbuf[i][row] = ptr;
-        ptr += (strides && strides[i] != 0) ? strides[i] : pw[i];
-      }
-    }*/
-    /*if (usetmpbuf) {
-      _tmpbuf = (JSAMPLE *)malloc(sizeof(JSAMPLE) * tmpbufsize);
-
-      ptr = _tmpbuf;
-      for (i = 0; i < dinfo->num_components; i++) {
-        (tmpbuf[i] = (JSAMPROW *)malloc(sizeof(JSAMPROW) * th[i]);
-        for (row = 0; row < th[i]; row++) {
-          tmpbuf[i][row] = ptr; ptr += iw[i];
-        }
-      }
-    }*/
-
-    dinfo->raw_data_out = TRUE;
+    dinfo->raw_data_out = true;
 
     jpeg_start_decompress(dinfo);
-    for (int row = 0; row < (int)dinfo->output_height;
-         row += dinfo->output_height) {
-      JSAMPARRAY yuvptr[3];
-      int crow[3];
 
-      for (i = 0; i < dinfo->num_components; i++) {
-        jpeg_component_info *compptr = &dinfo->comp_info[i];
+    int ph[3];
+    int pw[3];
+    int ih[3];
+    int iw[3];
 
-        if (info.subsampling_h == 1 && info.subsampling_w == 1) {
-          // compptr->_DCT_scaled_size = dctsize;
-          // compptr->MCU_sample_width = 16 * scalingfactor *
-          //                             compptr->v_samp_factor /
-          //                             dinfo->max_v_samp_factor;
-          // dinfo->idct->inverse_DCT[i] = dinfo->idct->inverse_DCT[0];
-        }
-        crow[i] = row * compptr->v_samp_factor / dinfo->max_v_samp_factor;
-        if (usetmpbuf)
-          yuvptr[i] = tmpbuf[i];
-        else
-          yuvptr[i] = &outbuf[i][crow[i]];
+    int pwidth = dinfo->output_width;
+    if (pwidth % 8 != 0)
+      pwidth += (8 - (dinfo->output_width % 8));
+
+    int pheight = dinfo->output_width;
+    if (pheight % 8 != 0)
+      pheight += (8 - (dinfo->output_width % 8));
+
+    uint8_t *ptr = pixels.data();
+
+    std::vector<JSAMPROW *> outbuf[3];
+
+    for (int i = 0; i < dinfo->num_components; i++) {
+      jpeg_component_info *compptr = &dinfo->comp_info[i];
+      ph[i] = pheight * compptr->v_samp_factor / dinfo->max_v_samp_factor;
+      pw[i] = pwidth * compptr->h_samp_factor / dinfo->max_h_samp_factor;
+      ih[i] = info.height * compptr->v_samp_factor / dinfo->max_v_samp_factor;
+      iw[i] = info.width * compptr->h_samp_factor / dinfo->max_h_samp_factor;
+      outbuf[i].resize(ph[i] * pw[i]);
+
+      for (int row = 0; row < ph[i]; row++) {
+        outbuf[i].data()[row] = (JSAMPROW *)(ptr + iw[i] * row);
       }
-      jpeg_read_raw_data(dinfo, yuvptr, 20);
-      /*if (usetmpbuf) {
-        int j;
+      ptr += iw[i] * ph[i];
+    }
 
-        for (i = 0; i < dinfo->num_components; i++) {
-          for (j = 0; j < MIN(th[i], ph[i] - crow[i]); j++) {
-            memcpy(outbuf[i][crow[i] + j], tmpbuf[i][j], pw[i]);
-          }
-        }
-      }*/
+    for (int row = 0; row < (int)dinfo->output_height;
+         row += dinfo->max_v_samp_factor * dinfo->min_DCT_scaled_size) {
+      JSAMPARRAY yuvptr[3];
+      for (int i = 0; i < dinfo->num_components; i++) {
+        jpeg_component_info *compptr = &dinfo->comp_info[i];
+        yuvptr[i] =
+            &((JSAMPROW *)outbuf[i].data())[row * compptr->v_samp_factor /
+                                            dinfo->max_v_samp_factor];
+      }
+
+      jpeg_read_raw_data(dinfo, yuvptr,
+                         dinfo->max_v_samp_factor * dinfo->min_DCT_scaled_size);
     }
     jpeg_finish_decompress(dinfo);
   } else {
+    throw std::runtime_error("huh?");
   }
 
   d->finished_reading = true;
