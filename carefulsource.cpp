@@ -225,6 +225,7 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
   const char *file_path = vsapi->mapGetData(in, "source", 0, NULL);
 
   int err = 0;
+
   bool subsampling_pad = !!vsapi->mapGetInt(in, "subsampling_pad", 0, &err);
   if (err)
     subsampling_pad = true;
@@ -238,8 +239,43 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
   if (err)
     jpeg_fancy_upsampling = true;
 
+  const char *jpeg_cmyk_profile =
+      vsapi->mapGetData(in, "jpeg_cmyk_profile", 0, &err);
+  cmsHPROFILE cmyk_profile = nullptr;
+  if (!err) {
+    cmyk_profile = cmsOpenProfileFromFile(jpeg_cmyk_profile, "r");
+    if (!cmyk_profile) {
+      throw std::runtime_error("jpeg_cmyk_profile: Bad profile");
+    }
+    if (cmsGetColorSpace(cmyk_profile) != cmsSigCmykData) {
+      throw std::runtime_error("jpeg_cmyk_profile: Not CMYK profile");
+    }
+  }
+  const char *jpeg_cmyk_target_profile_s =
+      vsapi->mapGetData(in, "jpeg_cmyk_target_profile", 0, &err);
+  cmsHPROFILE cmyk_target_profile = nullptr;
+  if (!err) {
+    std::string jpeg_cmyk_target_profile =
+        std::string(jpeg_cmyk_target_profile_s);
+    if (jpeg_cmyk_target_profile == "srgb") {
+      cmyk_target_profile = cmsCreate_sRGBProfile();
+    } else {
+      cmyk_target_profile =
+          cmsOpenProfileFromFile(jpeg_cmyk_target_profile_s, "r");
+      if (!cmyk_target_profile) {
+        throw std::runtime_error("jpeg_cmyk_target_profile: Bad profile");
+      }
+      if (cmsGetColorSpace(cmyk_target_profile) != cmsSigRgbData) {
+        throw std::runtime_error("jpeg_cmyk_target_profile: Not RGB profile");
+      }
+    }
+  }
+
   {
     std::ifstream file(file_path, std::ios_base::binary);
+    if (!file.good()) {
+      throw std::runtime_error("File not found");
+    }
     file.unsetf(std::ios::skipws);
     file.seekg(0, std::ios::end);
     size_t filesize = file.tellg();
@@ -251,8 +287,9 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
   if (PngDecoder::is_png(d->data.data())) {
     d->decoder = std::make_unique<PngDecoder>(&d->data);
   } else if (JpegDecoder::is_jpeg(d->data.data())) {
-    d->decoder = std::make_unique<JpegDecoder>(&d->data, subsampling_pad,
-                                               jpeg_rgb, jpeg_fancy_upsampling);
+    d->decoder = std::make_unique<JpegDecoder>(
+        &d->data, subsampling_pad, jpeg_rgb, jpeg_fancy_upsampling,
+        cmyk_profile, cmyk_target_profile);
   } else {
     throw std::runtime_error("file format unrecognized ");
   }
@@ -300,13 +337,37 @@ static const VSFrame *VS_CC convertcolor_getframe(
     auto src = vsapi->getFrameFilter(n, d->node, frameCtx);
     const VSMap *src_props = vsapi->getFramePropertiesRO(src);
 
-    auto src_profile_data =
-        vsapi->mapGetData(src_props, "ICCProfile", 0, nullptr);
-    int src_profile_size =
-        vsapi->mapGetDataSize(src_props, "ICCProfile", 0, nullptr);
+    cmsHPROFILE src_profile = nullptr;
 
-    cmsHPROFILE src_profile =
-        cmsOpenProfileFromMem(src_profile_data, src_profile_size);
+    if (d->input_profile) {
+      src_profile = d->input_profile;
+    } else {
+      int err = 0;
+      auto src_profile_data =
+          vsapi->mapGetData(src_props, "ICCProfile", 0, &err);
+      if (!err) {
+        int src_profile_size =
+            vsapi->mapGetDataSize(src_props, "ICCProfile", 0, nullptr);
+
+        src_profile = cmsOpenProfileFromMem(src_profile_data, src_profile_size);
+        if (!src_profile) {
+          throw std::runtime_error("Embedded ICC profile is broken");
+        }
+      } else {
+        if (d->src_vi->format.colorFamily == VSColorFamily::cfRGB) {
+          src_profile = cmsCreate_sRGBProfile();
+          std::cout << "Image didn't provide a profile, assuming sRGB"
+                    << std::endl;
+        } else if (d->src_vi->format.colorFamily == VSColorFamily::cfGray) {
+          src_profile = create_sRGB_gray();
+          std::cout << "Image didn't provide a profile, assuming sRGB-Gray"
+                    << std::endl;
+        } else {
+          throw std::runtime_error("Image didn't provide a profile, color "
+                                   "format doesn't a a default profile");
+        }
+      }
+    }
 
     decltype(src) fr[]{nullptr, nullptr, nullptr};
     constexpr int pl[]{0, 1, 2};
@@ -430,11 +491,16 @@ static const VSFrame *VS_CC convertcolor_getframe(
       }
     }
 
+    cmsUInt32Number rendering_intent = cmsGetHeaderRenderingIntent(src_profile);
+
     cmsHTRANSFORM transform = cmsCreateTransform(
         src_profile, intype, d->target_profile,
-        outtype_intermediate | PLANAR_SH(1),
-        cmsGetHeaderRenderingIntent(src_profile),
+        outtype_intermediate | PLANAR_SH(1), rendering_intent,
         cmsFLAGS_HIGHRESPRECALC | cmsFLAGS_BLACKPOINTCOMPENSATION);
+
+    if (!d->input_profile) {
+      cmsCloseProfile(src_profile);
+    }
 
     if (!transform) {
       throw std::runtime_error("invalid transform");
@@ -450,16 +516,13 @@ static const VSFrame *VS_CC convertcolor_getframe(
     if (!d->float_output) {
       cmsHTRANSFORM transform2 = cmsCreateTransform(
           d->target_profile, outtype_intermediate | PLANAR_SH(1),
-          d->target_profile, outtype | PLANAR_SH(1),
-          cmsGetHeaderRenderingIntent(src_profile),
+          d->target_profile, outtype | PLANAR_SH(1), rendering_intent,
           cmsFLAGS_HIGHRESPRECALC | cmsFLAGS_BLACKPOINTCOMPENSATION);
 
       cmsDoTransform(transform2, pixels2.data(), pixels3.data(),
                      d->vi.width * d->vi.height);
 
       cmsDeleteTransform(transform2);
-
-      cmsCloseProfile(src_profile);
 
       out_pointer = pixels3.data();
     }
@@ -475,10 +538,7 @@ static const VSFrame *VS_CC convertcolor_getframe(
                             reinterpret_cast<uint16_t **>(dst_planes),
                             dst_strides, n_out_planes, d->vi.height);
     } else {
-      copy_planar<uint8_t>(reinterpret_cast<uint8_t *>(out_pointer),
-                           d->vi.width, n_out_planes,
-                           reinterpret_cast<uint8_t **>(dst_planes),
-                           dst_strides, n_out_planes, d->vi.height);
+      throw std::runtime_error("This function should not be producing 8 bit");
     }
 
     return dst;
@@ -494,6 +554,10 @@ static void VS_CC convertcolor_free(void *instanceData, VSCore *core,
 
   if (d->target_profile) {
     cmsCloseProfile(d->target_profile);
+  }
+
+  if (d->input_profile) {
+    cmsCloseProfile(d->input_profile);
   }
 
   delete d;
@@ -516,8 +580,41 @@ void VS_CC convertcolor_create(const VSMap *in, VSMap *out, void *userData,
   if (err)
     d->float_output = d->src_vi->format.sampleType == VSSampleType::stFloat;
 
-  err = 0;
-  // TODO: input profile
+  const char *input_profile_s = vsapi->mapGetData(in, "input_profile", 0, &err);
+  if (!err) {
+    std::string input_profile = std::string(input_profile_s);
+    if (input_profile == "xyz") {
+      d->input_profile = cmsCreateXYZProfile();
+      if (d->src_vi->format.colorFamily != VSColorFamily::cfRGB) {
+        throw std::runtime_error("XYZ input profile only supports RGB input");
+      }
+    } else if (input_profile == "srgb") {
+      d->input_profile = cmsCreate_sRGBProfile();
+      if (d->src_vi->format.colorFamily != VSColorFamily::cfRGB) {
+        throw std::runtime_error("sRGB input profile only supports RGB input");
+      }
+    } else if (input_profile == "srgb-gray") {
+      d->input_profile = create_sRGB_gray();
+      if (d->src_vi->format.colorFamily != VSColorFamily::cfGray) {
+        throw std::runtime_error(
+            "sRGB-gray input profile only supports GRAY input");
+      }
+    } else {
+      d->input_profile = cmsOpenProfileFromFile(input_profile.c_str(), "r");
+      if (!d->input_profile) {
+        throw std::runtime_error("Bad target profile");
+      }
+      cmsColorSpaceSignature input_color = cmsGetColorSpace(d->input_profile);
+      if (input_color == cmsSigRgbData &&
+          d->src_vi->format.colorFamily != VSColorFamily::cfRGB) {
+        throw std::runtime_error("Input profile only supports RGB input");
+      }
+      if (input_color == cmsSigGrayData &&
+          d->src_vi->format.colorFamily != VSColorFamily::cfGray) {
+        throw std::runtime_error("Input profile only supports GRAY input");
+      }
+    }
+  }
 
   d->vi = {
       .format = {},
@@ -585,7 +682,9 @@ VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
                            "source:data;"
                            "subsampling_pad:int:opt;"
                            "jpeg_rgb:int:opt;"
-                           "jpeg_fancy_upsampling:int:opt;",
+                           "jpeg_fancy_upsampling:int:opt;"
+                           "jpeg_cmyk_profile:data:opt;"
+                           "jpeg_cmyk_target_profile:data:opt;",
                            "clip:vnode;", imagesource_create, nullptr, plugin);
   vspapi->registerFunction("ConvertColor",
                            "clip:vnode;"
