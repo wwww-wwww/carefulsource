@@ -22,19 +22,23 @@ endif
 
 lcms2_dep = dependency('lcms2')
 libpng_dep = dependency('libpng')
+libjpeg_dep = dependency('libjpeg')
 
 sources = [
-  'CarefulSource.cpp',
-  'CarefulSource.h',
+  'carefulsource.cpp',
+  'carefulsource.h',
   'decoder_base.h',
   'decoder_png.cpp',
   'decoder_png.h',
+  'decoder_jpeg.cpp',
+  'decoder_jpeg.h',
+  'cmyk.h',
 ]
 
 libs = []
 
 shared_module('carefulsource', sources,
-  dependencies: [vapoursynth_dep, lcms2_dep, libpng_dep],
+  dependencies: [vapoursynth_dep, lcms2_dep, libpng_dep, libjpeg_dep],
   link_with: libs,
   install: true,
   install_dir: install_dir,
