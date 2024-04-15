@@ -217,8 +217,14 @@ std::vector<uint8_t> JpegDecoder::decode() {
       ptr += iw[i] * ph[i];
     }
 
+#if JPEG_LIB_VERSION >= 70
+    int min_DCT_scaled_size = dinfo->min_DCT_h_scaled_size;
+#else
+    int min_DCT_scaled_size = dinfo->min_DCT_scaled_size;
+#endif
+
     for (int row = 0; row < (int)dinfo->output_height;
-         row += dinfo->max_v_samp_factor * dinfo->min_DCT_scaled_size) {
+         row += dinfo->max_v_samp_factor * min_DCT_scaled_size) {
       JSAMPARRAY yuvptr[3];
       for (int i = 0; i < dinfo->num_components; i++) {
         jpeg_component_info *compptr = &dinfo->comp_info[i];
@@ -228,7 +234,7 @@ std::vector<uint8_t> JpegDecoder::decode() {
       }
 
       jpeg_read_raw_data(dinfo, yuvptr,
-                         dinfo->max_v_samp_factor * dinfo->min_DCT_scaled_size);
+                         dinfo->max_v_samp_factor * min_DCT_scaled_size);
     }
     jpeg_finish_decompress(dinfo);
   } else {
