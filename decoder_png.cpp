@@ -10,10 +10,17 @@ PngDecoder::PngDecoder(std::vector<uint8_t> *data)
 
   auto color_type = png_get_color_type(d->png, d->pinfo);
 
+  uint32_t components;
+  if (color_type == PNG_COLOR_TYPE_PALETTE) {
+    components = 3;
+  } else {
+    components = png_get_channels(d->png, d->pinfo);
+  }
+
   info = {
       .width = png_get_image_width(d->png, d->pinfo),
       .height = png_get_image_height(d->png, d->pinfo),
-      .components = png_get_channels(d->png, d->pinfo),
+      .components = components,
       .has_alpha = (bool)(color_type & PNG_COLOR_MASK_ALPHA),
       .color = color_type & PNG_COLOR_MASK_COLOR ? VSColorFamily::cfRGB
                                                  : VSColorFamily::cfGray,
