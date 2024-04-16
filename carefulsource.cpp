@@ -296,6 +296,7 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
 
   ImageInfo info = d->decoder->info;
 
+#ifdef LOG_IMAGEINFO
   std::cout << "decoder " << d->decoder->get_name() << std::endl
             << "width " << info.width << std::endl
             << "height " << info.height << std::endl
@@ -308,6 +309,7 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
             << "bits " << info.bits << std::endl
             << "subsampling_w " << info.subsampling_w << std::endl
             << "subsampling_h " << info.subsampling_h << std::endl;
+#endif
 
   d->vi = {
       .format = {},
