@@ -3,6 +3,10 @@
 #include "decoder_jpeg.h"
 #include "decoder_png.h"
 
+#ifdef HAVE_JPEGLI
+#include "decoder_jpegli.h"
+#endif
+
 #include <fstream>
 #include <iostream>
 
@@ -57,6 +61,14 @@ static cmsToneCurve *Build_sRGBGamma() {
 }
 
 static cmsHPROFILE create_sRGB_gray() {
+  cmsToneCurve *gamma22 = Build_sRGBGamma();
+  cmsCIExyY D65 = {0.3127, 0.3290, 1.0};
+  cmsHPROFILE profile = cmsCreateGrayProfile(&D65, gamma22);
+  cmsFreeToneCurve(gamma22);
+  return profile;
+}
+
+static cmsHPROFILE create_sRGB_linear() {
   cmsToneCurve *gamma22 = Build_sRGBGamma();
   cmsCIExyY D65 = {0.3127, 0.3290, 1.0};
   cmsHPROFILE profile = cmsCreateGrayProfile(&D65, gamma22);
@@ -251,6 +263,7 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
       throw std::runtime_error("jpeg_cmyk_profile: Not CMYK profile");
     }
   }
+
   const char *jpeg_cmyk_target_profile_s =
       vsapi->mapGetData(in, "jpeg_cmyk_target_profile", 0, &err);
   cmsHPROFILE cmyk_target_profile = nullptr;
@@ -271,6 +284,12 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
     }
   }
 
+#ifdef HAVE_JPEGLI
+  bool jpeg_jpegli = !!vsapi->mapGetInt(in, "jpeg_jpegli", 0, &err);
+  if (err)
+    jpeg_jpegli = false;
+#endif
+
   {
     std::ifstream file(file_path, std::ios_base::binary);
     if (!file.good()) {
@@ -287,9 +306,17 @@ void VS_CC imagesource_create(const VSMap *in, VSMap *out, void *userData,
   if (PngDecoder::is_png(d->data.data())) {
     d->decoder = std::make_unique<PngDecoder>(&d->data);
   } else if (JpegDecoder::is_jpeg(d->data.data())) {
-    d->decoder = std::make_unique<JpegDecoder>(
-        &d->data, subsampling_pad, jpeg_rgb, jpeg_fancy_upsampling,
-        cmyk_profile, cmyk_target_profile);
+#ifdef HAVE_JPEGLI
+    if (jpeg_jpegli) {
+      d->decoder = std::make_unique<JpegliDecoder>(&d->data, jpeg_rgb);
+    } else {
+#endif
+      d->decoder = std::make_unique<JpegDecoder>(
+          &d->data, subsampling_pad, jpeg_rgb, jpeg_fancy_upsampling,
+          cmyk_profile, cmyk_target_profile);
+#ifdef HAVE_JPEGLI
+    }
+#endif
   } else {
     throw std::runtime_error("file format unrecognized ");
   }
@@ -686,7 +713,11 @@ VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
                            "jpeg_rgb:int:opt;"
                            "jpeg_fancy_upsampling:int:opt;"
                            "jpeg_cmyk_profile:data:opt;"
-                           "jpeg_cmyk_target_profile:data:opt;",
+                           "jpeg_cmyk_target_profile:data:opt;"
+#ifdef HAVE_JPEGLI
+                           "jpeg_jpegli:int:opt;"
+#endif
+                           ,
                            "clip:vnode;", imagesource_create, nullptr, plugin);
   vspapi->registerFunction("ConvertColor",
                            "clip:vnode;"
