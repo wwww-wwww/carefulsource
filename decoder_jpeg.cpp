@@ -186,57 +186,82 @@ std::vector<uint8_t> JpegDecoder::decode() {
 
     jpeg_start_decompress(dinfo);
 
-    int ph[3];
-    int pw[3];
     int ih[3];
     int iw[3];
 
-    int pwidth = dinfo->output_width;
-    if (pwidth % 8 != 0)
-      pwidth += (8 - (dinfo->output_width % 8));
-
-    int pheight = dinfo->output_width;
-    if (pheight % 8 != 0)
-      pheight += (8 - (dinfo->output_width % 8));
-
-    uint8_t *ptr = ppixels;
-
-    std::vector<JSAMPROW *> outbuf[3];
-
     for (int i = 0; i < dinfo->num_components; i++) {
       jpeg_component_info *compptr = &dinfo->comp_info[i];
-      ph[i] = pheight * compptr->v_samp_factor / dinfo->max_v_samp_factor;
-      pw[i] = pwidth * compptr->h_samp_factor / dinfo->max_h_samp_factor;
       ih[i] = info.height * compptr->v_samp_factor / dinfo->max_v_samp_factor;
       iw[i] = info.width * compptr->h_samp_factor / dinfo->max_h_samp_factor;
-      outbuf[i].resize(ph[i] * pw[i]);
-
-      for (int row = 0; row < ph[i]; row++) {
-        outbuf[i].data()[row] = (JSAMPROW *)(ptr + iw[i] * row);
-      }
-      ptr += iw[i] * ph[i];
     }
 
-#if JPEG_LIB_VERSION >= 70
-    int min_DCT_scaled_size = dinfo->min_DCT_h_scaled_size;
-#else
-    int min_DCT_scaled_size = dinfo->min_DCT_scaled_size;
-#endif
+    const int rows = dinfo->max_v_samp_factor * DCTSIZE;
 
-    for (int row = 0; row < (int)dinfo->output_height;
-         row += dinfo->max_v_samp_factor * min_DCT_scaled_size) {
-      JSAMPARRAY yuvptr[3];
-      for (int i = 0; i < dinfo->num_components; i++) {
-        jpeg_component_info *compptr = &dinfo->comp_info[i];
-        yuvptr[i] =
-            &((JSAMPROW *)outbuf[i].data())[row * compptr->v_samp_factor /
-                                            dinfo->max_v_samp_factor];
+    JSAMPARRAY yuv[3];
+
+    JSAMPROW rowptrs[2 * DCTSIZE + DCTSIZE + DCTSIZE];
+    yuv[0] = &rowptrs[0];
+    yuv[1] = &rowptrs[2 * DCTSIZE];
+    yuv[2] = &rowptrs[3 * DCTSIZE];
+
+    // Initialize rowptrs.
+    int numYRowsPerBlock = DCTSIZE * dinfo->comp_info[0].v_samp_factor;
+    for (int i = 0; i < numYRowsPerBlock; i++) {
+      rowptrs[0 * DCTSIZE + i] = ppixels + iw[0] * i;
+    }
+
+    for (int i = 0; i < DCTSIZE; i++) {
+      rowptrs[2 * DCTSIZE + i] = ppixels + iw[0] * ih[0] + iw[1] * i;
+      rowptrs[3 * DCTSIZE + i] = rowptrs[2 * DCTSIZE + i] + iw[1] * ih[1];
+    }
+
+    uint32_t numRowsPerBlock = numYRowsPerBlock;
+    // After each loop iteration, we will increment pointers to Y, U, and V.
+    size_t blockIncrementY = numRowsPerBlock * info.width;
+    size_t blockIncrementU = DCTSIZE * iw[1];
+    size_t blockIncrementV = DCTSIZE * iw[1];
+
+    const int numIters = dinfo->output_height / numRowsPerBlock;
+    for (int i = 0; i < numIters; i++) {
+      JDIMENSION linesRead = jpeg_read_raw_data(dinfo, yuv, numRowsPerBlock);
+      if (linesRead < numRowsPerBlock) {
+        throw std::runtime_error("huh?");
       }
 
-      jpeg_read_raw_data(dinfo, yuvptr,
-                         dinfo->max_v_samp_factor * min_DCT_scaled_size);
+      // Update rowptrs.
+      for (int i = 0; i < numYRowsPerBlock; i++) {
+        rowptrs[i] += blockIncrementY;
+      }
+      for (int i = 0; i < DCTSIZE; i++) {
+        rowptrs[i + 2 * DCTSIZE] += blockIncrementU;
+        rowptrs[i + 3 * DCTSIZE] += blockIncrementV;
+      }
     }
-    jpeg_finish_decompress(dinfo);
+
+    uint32_t remainingRows = dinfo->output_height - dinfo->output_scanline;
+
+    if (remainingRows > 0) {
+      int pwidth = dinfo->output_width;
+      if (pwidth % DCTSIZE != 0)
+        pwidth += (DCTSIZE - (dinfo->output_width % DCTSIZE));
+
+      std::vector<uint8_t> dummyRow(pwidth);
+      for (int i = remainingRows; i < numYRowsPerBlock; i++) {
+        rowptrs[i] = dummyRow.data();
+      }
+      int remainingUVRows =
+          dinfo->comp_info[1].downsampled_height - DCTSIZE * numIters;
+      for (int i = remainingUVRows; i < DCTSIZE; i++) {
+        rowptrs[i + 2 * DCTSIZE] = dummyRow.data();
+        rowptrs[i + 3 * DCTSIZE] = dummyRow.data();
+      }
+
+      JDIMENSION linesRead = jpeg_read_raw_data(dinfo, yuv, numRowsPerBlock);
+      if (linesRead < remainingRows) {
+        throw std::runtime_error("huh?");
+      }
+    }
+    // jpeg_finish_decompress(dinfo);
   } else {
     throw std::runtime_error("huh?");
   }
