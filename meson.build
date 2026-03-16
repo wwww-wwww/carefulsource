@@ -42,6 +42,7 @@ if get_option('py_ext')
     link_with: libs,
     install: true,
   )
+  py.install_sources(['vscarefulsource/__init__.py'], subdir: 'vscarefulsource')
 else
   shared_module('carefulsource', sources,
     dependencies: deps,

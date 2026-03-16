@@ -1,5 +1,15 @@
 # CarefulSource
 
+## Installation
+
+`pip install vsnoise`
+
+    import vsauto
+    vsauto.load()
+    ...
+    import vapoursynth as vs
+    vs.core.noise.Add(...)
+
 ## Usage
 
 ```
