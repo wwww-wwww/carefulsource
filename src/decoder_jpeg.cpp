@@ -195,8 +195,6 @@ std::vector<uint8_t> JpegDecoder::decode() {
       iw[i] = info.width * compptr->h_samp_factor / dinfo->max_h_samp_factor;
     }
 
-    const int rows = dinfo->max_v_samp_factor * DCTSIZE;
-
     JSAMPARRAY yuv[3];
 
     JSAMPROW rowptrs[2 * DCTSIZE + DCTSIZE + DCTSIZE];

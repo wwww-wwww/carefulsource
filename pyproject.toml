@@ -1,0 +1,18 @@
+[project]
+name = "vscarefulsource"
+version = "1"
+requires-python = ">3.12"
+dependencies = ["vsauto"]
+
+[build-system]
+build-backend = "mesonpy"
+requires = ["meson-python", "meson", "ninja"] 
+
+[tool.meson-python]
+allow-windows-internal-shared-libs = true
+
+[tool.meson-python.args]
+setup = ["-Dpy_ext=true"]
+
+[project.entry-points.vsauto]
+vscarefulsource = "vscarefulsource"

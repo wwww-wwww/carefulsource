@@ -21,8 +21,7 @@ void unswizzle(const T *in, uint32_t stride, uint32_t planes_in, T **planes,
 
 template <typename T>
 void swizzle(const T **planes, ptrdiff_t *strides, uint32_t planes_in, T *out,
-             uint32_t stride, uint32_t planes_out, uint32_t width,
-             uint32_t height) {
+             uint32_t planes_out, uint32_t width, uint32_t height) {
   for (uint32_t p = 0; p < std::min(planes_in, planes_out); p++) {
     for (uint32_t y = 0; y < height; y++) {
       for (uint32_t x = 0; x < width; x++) {
@@ -411,23 +410,19 @@ static const VSFrame *VS_CC convertcolor_getframe(
     if (d->src_vi->format.bytesPerSample == 4) {
       swizzle<uint32_t>(reinterpret_cast<const uint32_t **>(src_planes),
                         src_strides, n_in_planes, (uint32_t *)pixels.data(),
-                        d->vi.width * n_in_planes, n_in_planes, d->vi.width,
-                        d->vi.height);
+                        n_in_planes, d->vi.width, d->vi.height);
     } else if (d->src_vi->format.bytesPerSample == 2) {
       swizzle<uint16_t>(reinterpret_cast<const uint16_t **>(src_planes),
                         src_strides, n_in_planes, (uint16_t *)pixels.data(),
-                        d->vi.width * n_in_planes, n_in_planes, d->vi.width,
-                        d->vi.height);
+                        n_in_planes, d->vi.width, d->vi.height);
     } else {
       swizzle<uint8_t>(src_planes, src_strides, n_in_planes, pixels.data(),
-                       d->vi.width * n_in_planes, n_in_planes, d->vi.width,
-                       d->vi.height);
+                       n_in_planes, d->vi.width, d->vi.height);
     }
 
     bool is_gray = d->src_vi->format.numPlanes == 1;
     bool is_float = d->src_vi->format.sampleType == VSSampleType::stFloat;
     bool is_16 = d->src_vi->format.bitsPerSample == 16;
-    bool is_yuv = d->src_vi->format.colorFamily == VSColorFamily::cfYUV;
 
     int intype = is_gray && is_float ? TYPE_GRAY_FLT
                  : is_gray && is_16  ? TYPE_GRAY_16
