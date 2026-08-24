@@ -1,7 +1,7 @@
 project('carefulsource', 'cpp',
   default_options: ['buildtype=release', 'warning_level=2', 'b_lto=true', 'b_ndebug=if-release', 'cpp_std=c++20'],
   meson_version: '>=1.1.0',
-  version: '1'
+  version: '3'
 )
 
 cxx = meson.get_compiler('cpp')
@@ -20,11 +20,23 @@ vapoursynth_include_command = run_command(
   check: true,
 )
 vapoursynth_inc = include_directories(vapoursynth_include_command.stdout().strip(), is_system: true)
-vapoursynth_dep = declare_dependency(include_directories: vapoursynth_inc)
+vapoursynth_dep = declare_dependency(compile_args: '-I' + vapoursynth_include_command.stdout().strip())
 
-lcms2_dep = dependency('lcms2')
-libpng_dep = dependency('libpng')
-libjpeg_dep = dependency('libjpeg')
+lcms2_dep = dependency(
+  'lcms2',
+  fallback: ['lcms2', 'liblcms2_dep'],
+  default_options: ['tests=disabled', 'utils=false'],
+)
+libpng_dep = dependency(
+  'libpng',
+  fallback: ['libpng', 'libpng_dep'],
+  default_options: ['tests=false'],
+)
+libjpeg_dep = dependency(
+  'libjpeg',
+  fallback: ['libjpeg-turbo', 'libjpeg_dep'],
+  default_options: ['tests=disabled'],
+)
 
 sources = [
   'src/carefulsource.cpp',
@@ -41,7 +53,6 @@ if get_option('py_ext')
     link_with: libs,
     install: true,
   )
-  py.install_sources(['vscarefulsource/__init__.py'], subdir: 'vscarefulsource')
 else
   shared_module('carefulsource', sources,
     dependencies: deps,
