@@ -3,11 +3,11 @@ name = "vscarefulsource"
 version = "2"
 requires-python = ">3.12"
 readme = "README.md"
-dependencies = ["vsauto"]
+dependencies = ["vapoursynth", "vsauto"]
 
 [build-system]
 build-backend = "mesonpy"
-requires = ["meson-python", "meson", "ninja", "wheel"] 
+requires = ["meson-python", "meson", "ninja", "wheel", "vapoursynth"]
 
 [tool.meson-python]
 allow-windows-internal-shared-libs = true
