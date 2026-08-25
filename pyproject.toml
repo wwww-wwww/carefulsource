@@ -7,13 +7,7 @@ dependencies = ["vapoursynth>=74"]
 
 [build-system]
 build-backend = "hatchling.build"
-requires = ["hatchling", "packaging", "meson-python", "meson", "ninja", "wheel", "vapoursynth>=74"]
-
-[tool.meson-python]
-allow-windows-internal-shared-libs = true
-
-[tool.meson-python.args]
-setup = ["-Dpy_ext=false"]
+requires = ["hatchling", "packaging", "meson", "ninja", "wheel", "vapoursynth>=74"]
 
 [tool.hatch.build.targets.wheel]
 include = ["vapoursynth/plugins"]
