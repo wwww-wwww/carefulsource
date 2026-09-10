@@ -1,19 +1,33 @@
 [project]
 name = "vscarefulsource"
-version = "2"
+version = "3"
 requires-python = ">3.12"
 readme = "README.md"
-dependencies = ["vsauto"]
+dependencies = ["vapoursynth>=74"]
 
 [build-system]
-build-backend = "mesonpy"
-requires = ["meson-python", "meson", "ninja", "wheel"] 
+build-backend = "hatchling.build"
+requires = ["hatchling", "packaging", "meson", "ninja", "wheel", "vapoursynth>=74"]
 
-[tool.meson-python]
-allow-windows-internal-shared-libs = true
+[tool.hatch.build.targets.wheel]
+include = ["vapoursynth/plugins"]
+artifacts = [
+    "vapoursynth/plugins/*.dylib",
+    "vapoursynth/plugins/*.so",
+    "vapoursynth/plugins/*.dll",
+]
 
-[tool.meson-python.args]
-setup = ["-Dpy_ext=true"]
+[tool.hatch.build.targets.sdist]
+include = [
+  "src",
+  "subprojects/*.wrap",
+  "subprojects/lcms2-*",
+  "subprojects/libjpeg-turbo-*",
+  "subprojects/libpng-*",
+  "subprojects/zlib-*",
+  "meson.build",
+  "meson.options",
+]
 
-[project.entry-points.vsauto]
-vscarefulsource = "vscarefulsource"
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
