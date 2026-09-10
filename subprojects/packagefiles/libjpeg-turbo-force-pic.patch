@@ -1,0 +1,12 @@
+--- a/simd/meson.build
++++ b/simd/meson.build
+@@ -173,7 +173,7 @@
+     simd = static_library(
+       'simd',
+       simd_src,
+       include_directories: [incdir, 'nasm', dir],
+-      pic: get_option('default_library') != 'static',
++      pic: true,
+     )
+   endif
+ elif host_cpu in ['arm', 'aarch64']

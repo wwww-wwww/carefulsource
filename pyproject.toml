@@ -1,6 +1,6 @@
 [project]
 name = "vscarefulsource"
-version = "3"
+version = "6"
 requires-python = ">3.12"
 readme = "README.md"
 dependencies = ["vapoursynth>=74"]
@@ -21,6 +21,7 @@ artifacts = [
 include = [
   "src",
   "subprojects/*.wrap",
+  "subprojects/packagefiles",
   "subprojects/lcms2-*",
   "subprojects/libjpeg-turbo-*",
   "subprojects/libpng-*",
@@ -31,3 +32,13 @@ include = [
 
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
+
+[tool.cibuildwheel]
+archs = ["auto64"]
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
+
+[[tool.cibuildwheel.overrides]]
+select = "*-macosx_x86_64"
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.13" }

@@ -1,5 +1,5 @@
 project('carefulsource', 'cpp',
-  default_options: ['buildtype=release', 'warning_level=2', 'b_lto=true', 'b_ndebug=if-release', 'cpp_std=c++20'],
+  default_options: ['buildtype=release', 'warning_level=2', 'b_lto=true', 'b_ndebug=if-release', 'cpp_std=c++20', 'default_library=static', 'wrap_mode=forcefallback'],
   meson_version: '>=1.1.0',
   version: '3'
 )
@@ -25,17 +25,17 @@ vapoursynth_dep = declare_dependency(compile_args: '-I' + vapoursynth_include_co
 lcms2_dep = dependency(
   'lcms2',
   fallback: ['lcms2', 'liblcms2_dep'],
-  default_options: ['tests=disabled', 'utils=false'],
+  default_options: ['tests=disabled', 'utils=false', 'default_library=static'],
 )
 libpng_dep = dependency(
   'libpng',
   fallback: ['libpng', 'libpng_dep'],
-  default_options: ['tests=false'],
+  default_options: ['tests=false', 'default_library=static'],
 )
 libjpeg_dep = dependency(
   'libjpeg',
   fallback: ['libjpeg-turbo', 'libjpeg_dep'],
-  default_options: ['tests=disabled'],
+  default_options: ['tests=disabled', 'default_library=static'],
 )
 
 sources = [
