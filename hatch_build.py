@@ -25,7 +25,7 @@ class CustomHook(BuildHookInterface[Any]):
                 "setup",
                 "build",
                 "--vsenv",
-                "-Dpy_ext=false",
+                "--reconfigure",
             ],
             check=True,
         )

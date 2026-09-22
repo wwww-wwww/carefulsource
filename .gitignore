@@ -8,3 +8,8 @@
 /build*
 /dist*
 /.venv
+/__pycache__
+# build against a local checkout least of all.
+/subprojects/*
+!/subprojects/*.wrap
+!/subprojects/packagefiles/

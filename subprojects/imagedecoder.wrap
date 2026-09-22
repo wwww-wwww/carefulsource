@@ -1,0 +1,7 @@
+[wrap-git]
+url = https://github.com/mpreg-ca/imagedecoder3
+revision = master
+depth = 1
+
+[provide]
+imagedecoder = imagedecoder_dep

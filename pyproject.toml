@@ -33,6 +33,16 @@ include = [
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
 
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "hatch_build.py" },
+    { file = "meson.build" },
+    { file = "meson.options" },
+    { file = "src/**" },
+    { file = "subprojects/*.wrap" },
+]
+
 [tool.cibuildwheel]
 archs = ["auto64"]
 
